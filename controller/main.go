@@ -9,12 +9,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/nat"
 )
 
 var (
@@ -76,6 +78,7 @@ func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		Image string `json:"image"`
 		Name  string `json:"name,omitempty"`
+		Port  int    `json:"port,omitempty"`
 	}
 
 	var reqBody RequestBody
@@ -84,21 +87,29 @@ func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containerID, err := CreateAndStartContainer(reqBody.Image, reqBody.Name)
+	if reqBody.Port == 0 {
+		http.Error(w, "Port number is required", http.StatusBadRequest)
+		return
+	}
+
+	containerID, hostPort, err := CreateAndStartContainer(reqBody.Image, reqBody.Name, reqBody.Port)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create and start container: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"container_id": containerID})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"container_id": containerID,
+		"host_port":    hostPort,
+	})
 }
 
-func CreateAndStartContainer(imageName, containerName string) (string, error) {
+func CreateAndStartContainer(imageName, containerName string, containerPort int) (string, int, error) {
 	// Initialize Docker client
 	cli, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
-		return "", fmt.Errorf("failed to create Docker client: %w", err)
+		return "", 0, fmt.Errorf("failed to create Docker client: %w", err)
 	}
 	defer cli.Close()
 
@@ -107,24 +118,44 @@ func CreateAndStartContainer(imageName, containerName string) (string, error) {
 	// Pull the image if not available locally
 	reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
 	if err != nil {
-		return "", fmt.Errorf("failed to pull image %s: %w", imageName, err)
+		return "", 0, fmt.Errorf("failed to pull image %s: %w", imageName, err)
 	}
 	defer reader.Close()
 
 	out, _ := io.ReadAll(reader)
 	fmt.Printf("Pulling image: %s\n", out)
 
+	// Define the port to expose
+	containerPortStr := fmt.Sprintf("%d/tcp", containerPort)
+
+	// Set up port bindings
+	portBindings := nat.PortMap{
+		nat.Port(containerPortStr): []nat.PortBinding{
+			{
+				HostPort: "0", // "0" tells Docker to assign a random port
+			},
+		},
+	}
+
+	// Expose the port
+	exposedPorts := nat.PortSet{
+		nat.Port(containerPortStr): struct{}{},
+	}
+
 	// Create the container
 	resp, err := cli.ContainerCreate(ctx, &container.Config{
-		Image: imageName,
-	}, nil, nil, nil, containerName)
+		Image:        imageName,
+		ExposedPorts: exposedPorts,
+	}, &container.HostConfig{
+		PortBindings: portBindings,
+	}, nil, nil, containerName)
 	if err != nil {
-		return "", fmt.Errorf("failed to create container: %w", err)
+		return "", 0, fmt.Errorf("failed to create container: %w", err)
 	}
 
 	// Start the container
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return "", fmt.Errorf("failed to start container %s: %w", resp.ID, err)
+		return "", 0, fmt.Errorf("failed to start container %s: %w", resp.ID, err)
 	}
 
 	fmt.Printf("Container %s started successfully\n", resp.ID)
@@ -134,7 +165,27 @@ func CreateAndStartContainer(imageName, containerName string) (string, error) {
 	startedContainers = append(startedContainers, resp.ID)
 	startedContainersMutex.Unlock()
 
-	return resp.ID, nil
+	// Inspect the container to get the mapped port
+	containerJSON, err := cli.ContainerInspect(ctx, resp.ID)
+	if err != nil {
+		return resp.ID, 0, fmt.Errorf("failed to inspect container %s: %w", resp.ID, err)
+	}
+
+	// Get the dynamically mapped port
+	var hostPort int
+	portSpec := nat.Port(containerPortStr)
+	if bindings, ok := containerJSON.NetworkSettings.Ports[portSpec]; ok && len(bindings) > 0 {
+		hostPortStr := bindings[0].HostPort
+		fmt.Printf("Container %s is mapped to host port %s\n", resp.ID, hostPortStr)
+		hostPort, err = strconv.Atoi(hostPortStr)
+		if err != nil {
+			return resp.ID, 0, fmt.Errorf("invalid host port %s: %w", hostPortStr, err)
+		}
+	} else {
+		return resp.ID, 0, fmt.Errorf("no port mapping found for %s", portSpec)
+	}
+
+	return resp.ID, hostPort, nil
 }
 
 // StopContainer stops a Docker container given its container ID or name
@@ -157,16 +208,6 @@ func StopContainer(containerID string) error {
 		fmt.Printf("Container %s stopped successfully.\n", containerID)
 	}
 
-	// // Remove the container ID from the list of started containers
-	// startedContainersMutex.Lock()
-	// for i, id := range startedContainers {
-	// 	if id == containerID {
-	// 		startedContainers = append(startedContainers[:i], startedContainers[i+1:]...)
-	// 		break
-	// 	}
-	// }
-	// startedContainersMutex.Unlock()
-
 	return nil
 }
 
@@ -176,6 +217,7 @@ func RemoveContainer(containerID string) error {
 	if err := DockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
 		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
 	}
+	fmt.Printf("Container %s removed successfully.\n", containerID)
 	return nil
 }
 
@@ -227,9 +269,6 @@ func StopContainerHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf("Failed to stop container %s: %v", reqBody.ContainerID, err), http.StatusInternalServerError)
 		return
 	}
-
-	// Remove the container ID from the list of started containers
-	// (Already handled in StopContainer function)
 
 	w.WriteHeader(http.StatusNoContent)
 }
