@@ -27,6 +27,33 @@ export default function Home() {
     }
   };
 
+  // Function to start a relay container
+  const startRelay = async () => {
+    try {
+      const response = await fetch('http://localhost:8080/containers/create', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: 'relay:dev',
+          port: 80,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error starting container: ${errorText}`);
+      }
+
+      const data = await response.json();
+      console.log('Container started:', data);
+      fetchContainers(); // Refresh the container list
+    } catch (error) {
+      console.error('Error starting container:', error);
+    }
+  };
+
   // Function to start a new container
   const startContainer = async () => {
     try {
@@ -164,7 +191,8 @@ export default function Home() {
           <p>{`Number of running containers: ${containers.length}`}</p>
 
           {/* Buttons */}
-          <button onClick={startContainer}>Start New Container</button>
+          <button onClick={startRelay}>Start Relay Container</button>
+          <button onClick={startContainer}>Start Container</button>
           <button onClick={startTenContainers}>Start 10 Containers</button>
           <button onClick={stopAllContainers}>Stop All Containers</button>
         </div>

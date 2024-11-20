@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,8 @@ var (
 	startedContainers []string
 	// Mutex to ensure thread-safe access to startedContainers
 	startedContainersMutex sync.Mutex
+	logStreamers           = make(map[string]*ContainerLogStreamer)
+	logStreamersMutex      sync.Mutex
 )
 
 const appLabel = "punisher"
@@ -37,6 +40,11 @@ type ContainerInfo struct {
 	Image  string   `json:"image"`
 	Status string   `json:"status"`
 	State  string   `json:"state"`
+}
+
+type ContainerLogStreamer struct {
+	containerID string
+	stopChan    chan struct{}
 }
 
 // ListContainers lists all Docker containers (running and stopped)
@@ -109,48 +117,69 @@ func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Helper function to check if an image exists locally
+func imageExists(cli *client.Client, ctx context.Context, imageName string) (bool, error) {
+	images, err := cli.ImageList(ctx, image.ListOptions{})
+	if err != nil {
+		return false, err
+	}
+
+	for _, img := range images {
+		for _, tag := range img.RepoTags {
+			if tag == imageName {
+				return true, nil
+			}
+		}
+	}
+
+	return false, nil
+}
+
 func CreateAndStartContainer(imageName, containerName string, containerPort int) (string, int, error) {
-	// Initialize Docker client
-	cli, err := client.NewClientWithOpts(client.FromEnv)
-	if err != nil {
-		return "", 0, fmt.Errorf("failed to create Docker client: %w", err)
-	}
-	defer cli.Close()
-
 	ctx := context.Background()
+	cli := DockerClient
 
-	// Pull the image if not available locally
-	reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
+	// Check if the image exists locally
+	imageExistsLocally, err := imageExists(cli, ctx, imageName)
 	if err != nil {
-		return "", 0, fmt.Errorf("failed to pull image %s: %w", imageName, err)
+		return "", 0, fmt.Errorf("failed to check if image exists: %w", err)
 	}
-	defer reader.Close()
 
-	out, _ := io.ReadAll(reader)
-	fmt.Printf("Pulling image: %s\n", out)
+	// Pull the image only if it doesn't exist locally
+	if !imageExistsLocally {
+		fmt.Printf("Image %s not found locally. Pulling...\n", imageName)
+		reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
+		if err != nil {
+			return "", 0, fmt.Errorf("failed to pull image %s: %w", imageName, err)
+		}
+		defer reader.Close()
 
-	// Define the port to expose
-	containerPortStr := fmt.Sprintf("%d/tcp", containerPort)
+		out, _ := io.ReadAll(reader)
+		fmt.Printf("Pulling image: %s\n", out)
+	} else {
+		fmt.Printf("Using local image %s\n", imageName)
+	}
 
-	// Set up port bindings
+	// Expose container port
+	exposedPorts := nat.PortSet{
+		nat.Port(fmt.Sprintf("%d/tcp", containerPort)): struct{}{},
+	}
+
+	// Port bindings
 	portBindings := nat.PortMap{
-		nat.Port(containerPortStr): []nat.PortBinding{
+		nat.Port(fmt.Sprintf("%d/tcp", containerPort)): []nat.PortBinding{
 			{
-				HostPort: "0", // "0" tells Docker to assign a random port
+				HostPort: "0",
 			},
 		},
 	}
 
-	// Expose the port
-	exposedPorts := nat.PortSet{
-		nat.Port(containerPortStr): struct{}{},
-	}
-
+	// Define labels to identify containers managed by this app
 	labels := map[string]string{
-		"managed_by": appLabel, // You can change "my_app" to any identifier you prefer
+		"managed_by": appLabel,
 	}
 
-	// Create the container
+	// Create the container with labels
 	resp, err := cli.ContainerCreate(ctx, &container.Config{
 		Image:        imageName,
 		ExposedPorts: exposedPorts,
@@ -164,37 +193,80 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int)
 
 	// Start the container
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return "", 0, fmt.Errorf("failed to start container %s: %w", resp.ID, err)
+		return "", 0, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	fmt.Printf("Container %s started successfully\n", resp.ID)
+	go startLogStreaming(resp.ID)
 
-	// Add the container ID to the list of started containers
-	startedContainersMutex.Lock()
-	startedContainers = append(startedContainers, resp.ID)
-	startedContainersMutex.Unlock()
-
-	// Inspect the container to get the mapped port
+	// Retrieve the host port
 	containerJSON, err := cli.ContainerInspect(ctx, resp.ID)
 	if err != nil {
-		return resp.ID, 0, fmt.Errorf("failed to inspect container %s: %w", resp.ID, err)
+		return "", 0, fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	// Get the dynamically mapped port
 	var hostPort int
-	portSpec := nat.Port(containerPortStr)
-	if bindings, ok := containerJSON.NetworkSettings.Ports[portSpec]; ok && len(bindings) > 0 {
-		hostPortStr := bindings[0].HostPort
-		fmt.Printf("Container %s is mapped to host port %s\n", resp.ID, hostPortStr)
-		hostPort, err = strconv.Atoi(hostPortStr)
-		if err != nil {
-			return resp.ID, 0, fmt.Errorf("invalid host port %s: %w", hostPortStr, err)
-		}
-	} else {
-		return resp.ID, 0, fmt.Errorf("no port mapping found for %s", portSpec)
+	portInfo, ok := containerJSON.NetworkSettings.Ports[nat.Port(fmt.Sprintf("%d/tcp", containerPort))]
+	if ok && len(portInfo) > 0 {
+		hostPort, _ = strconv.Atoi(portInfo[0].HostPort)
 	}
 
 	return resp.ID, hostPort, nil
+}
+
+func startLogStreaming(containerID string) {
+	ctx := context.Background()
+
+	// Create a log streamer
+	streamer := &ContainerLogStreamer{
+		containerID: containerID,
+		stopChan:    make(chan struct{}),
+	}
+
+	// Add the streamer to the map
+	logStreamersMutex.Lock()
+	logStreamers[containerID] = streamer
+	logStreamersMutex.Unlock()
+
+	// Options for logs
+	options := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+		Tail:       "all",
+	}
+
+	// Get the logs
+	out, err := DockerClient.ContainerLogs(ctx, containerID, options)
+	if err != nil {
+		fmt.Printf("Error getting logs for container %s: %v\n", containerID, err)
+		return
+	}
+	defer out.Close()
+
+	// Stream the logs
+	scanner := bufio.NewScanner(out)
+	for scanner.Scan() {
+		select {
+		case <-streamer.stopChan:
+			return
+		default:
+			line := scanner.Text()
+			fmt.Printf("[%s] %s\n", containerID[:12], line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Printf("Error reading logs for container %s: %v\n", containerID, err)
+	}
+}
+
+func stopLogStreaming(containerID string) {
+	logStreamersMutex.Lock()
+	defer logStreamersMutex.Unlock()
+
+	if streamer, exists := logStreamers[containerID]; exists {
+		close(streamer.stopChan)
+		delete(logStreamers, containerID)
+	}
 }
 
 // StopContainer stops a Docker container given its container ID or name
@@ -216,6 +288,8 @@ func StopContainer(containerID string) error {
 		}
 		fmt.Printf("Container %s stopped successfully.\n", containerID)
 	}
+
+	stopLogStreaming(containerID)
 
 	return nil
 }
@@ -258,6 +332,8 @@ func StopAllContainers() error {
 		} else {
 			fmt.Printf("Container %s removed successfully.\n", c.ID)
 		}
+
+		stopLogStreaming(c.ID)
 	}
 
 	if len(errorsList) > 0 {
@@ -355,6 +431,13 @@ func enableCors(next http.Handler) http.Handler {
 
 func cleanup() {
 	fmt.Println("Cleaning up started containers...")
+
+	logStreamersMutex.Lock()
+	for containerID, streamer := range logStreamers {
+		close(streamer.stopChan)
+		delete(logStreamers, containerID)
+	}
+	logStreamersMutex.Unlock()
 
 	startedContainersMutex.Lock()
 	defer startedContainersMutex.Unlock()
