@@ -35,11 +35,19 @@ var (
 const appLabel = "punisher"
 
 type ContainerInfo struct {
-	ID     string   `json:"id"`
-	Names  []string `json:"names"`
-	Image  string   `json:"image"`
-	Status string   `json:"status"`
-	State  string   `json:"state"`
+	ID     string        `json:"id"`
+	Names  []string      `json:"names"`
+	Image  string        `json:"image"`
+	Status string        `json:"status"`
+	State  string        `json:"state"`
+	Ports  []PortMapping `json:"ports"`
+}
+
+type PortMapping struct {
+	IP          string `json:"ip"`
+	PrivatePort uint16 `json:"private_port"`
+	PublicPort  uint16 `json:"public_port"`
+	Type        string `json:"type"`
 }
 
 type ContainerLogStreamer struct {
@@ -56,22 +64,34 @@ func ListContainers() ([]ContainerInfo, error) {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
-	containerInfos := make([]ContainerInfo, 0)
+	containerInfos := make([]ContainerInfo, 0, len(containers))
 
 	for _, c := range containers {
+		// Extract port mappings from c.Ports
+		portMappings := make([]PortMapping, 0, len(c.Ports))
+		for _, port := range c.Ports {
+			portMappings = append(portMappings, PortMapping{
+				IP:          port.IP,
+				PrivatePort: port.PrivatePort,
+				PublicPort:  port.PublicPort,
+				Type:        port.Type,
+			})
+		}
+
 		containerInfos = append(containerInfos, ContainerInfo{
 			ID:     c.ID[:12],
 			Names:  c.Names,
 			Image:  c.Image,
 			Status: c.Status,
 			State:  c.State,
+			Ports:  portMappings,
 		})
 	}
 
 	return containerInfos, nil
 }
 
-// StartContainer starts a Docker container given its container ID or name
+// / StartContainer starts a Docker container given its container ID or name
 func StartContainer(containerID string) error {
 	ctx := context.Background()
 	if err := DockerClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {

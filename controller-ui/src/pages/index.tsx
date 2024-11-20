@@ -1,5 +1,12 @@
 import Head from "next/head";
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+
+interface PortMapping {
+  ip: string;
+  private_port: number;
+  public_port: number;
+  type: string;
+}
 
 interface ContainerInfo {
   id: string;
@@ -7,11 +14,21 @@ interface ContainerInfo {
   image: string;
   status: string;
   state: string;
+  ports: PortMapping[];
+}
+
+interface ContainerData {
+  peerId: string;
+  peerList: string[];
+  type: string;
 }
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [imageName, setImageName] = useState<string>('nginx:latest');
+  const [imageName, setImageName] = useState<string>('gossip:dev');
+  const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
+  const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
+  const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -22,6 +39,7 @@ export default function Home() {
       }
       const data: ContainerInfo[] = await response.json();
       setContainers(data.filter((c) => c.state === 'running'));
+      console.log('containerslist', containers);
     } catch (error) {
       console.error('Error fetching containers:', error);
     }
@@ -157,11 +175,66 @@ export default function Home() {
     }
   };
 
+  // Update connections based on containerData
   useEffect(() => {
-    fetchContainers();
-    const interval = setInterval(fetchContainers, 5000); // Refresh every 5 seconds
+    console.log('containerData', containerData);
+    const newConnections: { from: string; to: string }[] = [];
+
+    Object.keys(containerData).forEach((containerId) => {
+      const data = containerData[containerId];
+      if (data && data.peerList) {
+        data.peerList.forEach((peerId) => {
+          // Find the container that has this peerId
+          const targetContainerId = Object.keys(containerData).find(
+            (id) => containerData[id]?.peerId === peerId
+          );
+
+          if (targetContainerId) {
+            // Avoid duplicate connections
+            if (!newConnections.some(conn => conn.from === containerId && conn.to === targetContainerId)) {
+              newConnections.push({ from: containerId, to: targetContainerId });
+            }
+          }
+        });
+      }
+    });
+
+    setConnections(newConnections);
+  }, [containerData]);
+
+  useEffect(() => {
+    const pollContainers = () => {
+      console.log('Polling containers');
+      containers.forEach((container) => {
+        console.log('Polling container', container.id);
+        // Get the public port from the container's port mappings
+        const portMapping = container.ports.find((port) => port.type === 'tcp');
+        if (portMapping && portMapping.public_port) {
+          const url = `http://localhost:${portMapping.public_port}/`;
+
+          fetch(url)
+            .then((response) => response.json())
+            .then((data) => {
+              setContainerData((prevData) => ({
+                ...prevData,
+                [container.id]: data,
+              }));
+            })
+            .catch((error) => {
+              console.error(`Error fetching data from container ${container.id}:`, error);
+            });
+        }
+      });
+    };
+
+
+    const interval = setInterval(() => {
+      fetchContainers()
+      pollContainers()
+    }, 1000)
     return () => clearInterval(interval);
-  }, []);
+  }, [containers, fetchContainers]);
+
 
   return (
     <>
@@ -173,7 +246,7 @@ export default function Home() {
       </Head>
       <div className="app-container">
         <div className="sidebar">
-          <h1>Docker Containers</h1>
+          <h1>Gossip Simulator</h1>
 
           {/* Input box for Docker image name */}
           <div className="input-group">
@@ -197,6 +270,39 @@ export default function Home() {
           <button onClick={stopAllContainers}>Stop All Containers</button>
         </div>
         <div className="container-circle">
+          <svg className="connections">
+            {connections.map((conn, index) => {
+              const fromEl = containerRefs.current[conn.from];
+              const toEl = containerRefs.current[conn.to];
+
+              if (fromEl && toEl) {
+                const fromRect = fromEl.getBoundingClientRect();
+                const toRect = toEl.getBoundingClientRect();
+
+                const svgRect = fromEl.parentElement!.getBoundingClientRect();
+
+                const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
+                const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
+
+                const x2 = toRect.left + toRect.width / 2 - svgRect.left;
+                const y2 = toRect.top + toRect.height / 2 - svgRect.top;
+
+                return (
+                  <line
+                    key={index}
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke={`#${conn.from.substring(0, 6)}`}
+                    strokeWidth="2"
+                  />
+                );
+              } else {
+                console.log('No connections');
+              }
+            })}
+          </svg>
           {containers.map((container, index) => {
             const numContainers = containers.length;
 
@@ -214,6 +320,7 @@ export default function Home() {
             return (
               <div
                 key={container.id}
+                ref={(el) => { containerRefs.current[container.id] = el; }}
                 className="container-item"
                 onClick={() => stopContainer(container.id)}
                 style={{
@@ -222,8 +329,9 @@ export default function Home() {
                   lineHeight: `${itemSize}px`,
                   transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                   fontSize: `${fontSize}px`,
+                  backgroundColor: `#${container.id.substring(0, 6)}`
                 }}
-                title={`Container ID: ${container.id}`}
+                title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
               >
                 {container.image}
               </div>
@@ -285,6 +393,14 @@ export default function Home() {
           height: 800px;
           margin: 0 auto;
           overflow: hidden;
+        }
+
+        .connections {
+          position: absolute;
+          width: 100%;
+          height: 100%;
+          top: 0;
+          left: 0;
         }
 
         .container-item {
