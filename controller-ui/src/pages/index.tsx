@@ -11,6 +11,7 @@ interface ContainerInfo {
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
+  const [imageName, setImageName] = useState<string>('nginx:latest');
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -35,7 +36,7 @@ export default function Home() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          image: 'nginx:latest',
+          image: imageName,
           port: 80,
         }),
       });
@@ -65,7 +66,7 @@ export default function Home() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              image: 'nginx:latest',
+              image: imageName,
               port: 80,
             }),
           })
@@ -143,13 +144,30 @@ export default function Home() {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
-      <div>
-        <h1>Docker Containers</h1>
-        <p>{`Number of running containers: ${containers.length}`}</p>
-        <button onClick={startContainer}>Start New Container</button>
-        <button onClick={startTenContainers}>Start 10 Containers</button>
-        <button onClick={stopAllContainers}>Stop All Containers</button>
+      <div className="app-container">
+        <div className="sidebar">
+          <h1>Docker Containers</h1>
 
+          {/* Input box for Docker image name */}
+          <div className="input-group">
+            <label>
+              Docker Image Name:
+              <input
+                type="text"
+                value={imageName}
+                onChange={(e) => setImageName(e.target.value)}
+              />
+            </label>
+          </div>
+
+          {/* Display the number of running containers */}
+          <p>{`Number of running containers: ${containers.length}`}</p>
+
+          {/* Buttons */}
+          <button onClick={startContainer}>Start New Container</button>
+          <button onClick={startTenContainers}>Start 10 Containers</button>
+          <button onClick={stopAllContainers}>Stop All Containers</button>
+        </div>
         <div className="container-circle">
           {containers.map((container, index) => {
             const numContainers = containers.length;
@@ -185,9 +203,58 @@ export default function Home() {
           })}
         </div>
         <style jsx>{`
+        .app-container {
+          display: flex;
+          min-height: 100vh;
+        }
+
+        .sidebar {
+          width: 250px;
+          padding: 20px;
+          background-color: #111111;
+        }
+
+        .sidebar h1 {
+          text-align: center;
+          margin-bottom: 30px;
+        }
+
+        .input-group {
+          margin-bottom: 20px;
+        }
+
+        .input-group label {
+          display: flex;
+          flex-direction: column;
+          font-size: 16px;
+        }
+
+        .input-group input {
+          margin-top: 5px;
+          padding: 5px;
+          font-size: 16px;
+        }
+
+        .sidebar p {
+          font-size: 18px;
+          margin-bottom: 20px;
+          text-align: center;
+        }
+
+        .sidebar button {
+          display: block;
+          width: 100%;
+          margin-bottom: 10px;
+          padding: 10px;
+          font-size: 16px;
+          cursor: pointer;
+        }
+
         .container-circle {
-          width: 700px;
-          height: 700px;
+          position: relative;
+          flex-grow: 1;
+          width: 800px;
+          height: 800px;
           margin: 0 auto;
           overflow: hidden;
         }
@@ -206,21 +273,6 @@ export default function Home() {
           overflow: hidden;
           white-space: nowrap;
           text-overflow: ellipsis;
-        }
-
-        button {
-          margin: 0 20px;
-          padding: 10px 20px;
-          font-size: 16px;
-        }
-
-        h1 {
-          text-align: center;
-        }
-
-        p {
-          text-align: center;
-          font-size: 18px;
         }
       `}</style>
       </div>
