@@ -19,9 +19,14 @@ interface ContainerInfo {
 
 interface ContainerData {
   peerId: string;
-  peerList: string[];
+  peers: string[];
+  subscribers: string[];
+  connections: string[];
+  topics: string[];
   type: string;
 }
+
+type MapType = 'peers' | 'subscribers' | 'connections';
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
@@ -29,6 +34,7 @@ export default function Home() {
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
   const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
+  const [mapType, setMapType] = useState<MapType>('connections');
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -39,14 +45,16 @@ export default function Home() {
       }
       const data: ContainerInfo[] = await response.json();
       setContainers(data.filter((c) => c.state === 'running'));
-      console.log('containerslist', containers);
     } catch (error) {
       console.error('Error fetching containers:', error);
+      setContainers([])
+      setContainerData({})
+      setConnections([])
     }
   };
 
   // Function to start a relay container
-  const startRelay = async () => {
+  const startBootstrap = async () => {
     try {
       const response = await fetch('http://localhost:8080/containers/create', {
         method: 'POST',
@@ -177,13 +185,15 @@ export default function Home() {
 
   // Update connections based on containerData
   useEffect(() => {
-    console.log('containerData', containerData);
     const newConnections: { from: string; to: string }[] = [];
 
     Object.keys(containerData).forEach((containerId) => {
       const data = containerData[containerId];
-      if (data && data.peerList) {
-        data.peerList.forEach((peerId) => {
+
+      const connectionList = data && data[mapType]
+      console.log({mapType, connectionList})
+      if (connectionList && Array.isArray(connectionList)) {
+        connectionList.forEach((peerId) => {
           // Find the container that has this peerId
           const targetContainerId = Object.keys(containerData).find(
             (id) => containerData[id]?.peerId === peerId
@@ -200,10 +210,14 @@ export default function Home() {
     });
 
     setConnections(newConnections);
-  }, [containerData]);
+  }, [containerData, mapType]);
 
   useEffect(() => {
     const pollContainers = () => {
+      if (containers.length === 0) {
+        return
+      }
+
       console.log('Polling containers');
       containers.forEach((container) => {
         console.log('Polling container', container.id);
@@ -231,7 +245,7 @@ export default function Home() {
     const interval = setInterval(() => {
       fetchContainers()
       pollContainers()
-    }, 1000)
+    }, 100)
     return () => clearInterval(interval);
   }, [containers, fetchContainers]);
 
@@ -262,12 +276,16 @@ export default function Home() {
 
           {/* Display the number of running containers */}
           <p>{`Number of running containers: ${containers.length}`}</p>
+          <p>{`Showing ${mapType}`}</p>
 
           {/* Buttons */}
-          <button onClick={startRelay}>Start Relay Container</button>
+          <button onClick={startBootstrap}>Start Bootstrap</button>
           <button onClick={startContainer}>Start Container</button>
           <button onClick={startTenContainers}>Start 10 Containers</button>
           <button onClick={stopAllContainers}>Stop All Containers</button>
+          <button onClick={() => setMapType('connections')}>Show Connections</button>
+          <button onClick={() => setMapType('peers')}>Show Known Peers</button>
+          <button onClick={() => setMapType('subscribers')}>Show Subscribers</button>
         </div>
         <div className="container-circle">
           <svg className="connections">
@@ -298,8 +316,6 @@ export default function Home() {
                     strokeWidth="2"
                   />
                 );
-              } else {
-                console.log('No connections');
               }
             })}
           </svg>

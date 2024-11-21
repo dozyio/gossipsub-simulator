@@ -54,11 +54,21 @@ const server = await createLibp2p({
       listenOnly: false
     })
   ],
+  connectionManager: {
+    maxConnections: 15,
+  },
   services: {
     identify: identify(),
     pubsub: gossipsub({
       doPX: true,
       emitSelf: false,
+      scoreParams: {
+        IPColocationFactorWeight: 0,
+        behaviourPenaltyWeight: 0,
+      },
+      scoreThresholds: {
+        acceptPXThreshold: 0
+      }
     }),
   }
 })
@@ -70,39 +80,69 @@ server.services.pubsub.subscribe(topic)
 //   console.log(`Message received on topic '${topic}'`)
 // })
 
-server.addEventListener('peer:discovery', async (evt) => {
-  const { multiaddrs, id } = evt.detail
+// server.addEventListener('peer:discovery', async (evt) => {
+//   const { multiaddrs, id } = evt.detail
+//
+//   if (server.getConnections(id)?.length > 0) {
+//     // console.log(`Already connected to peer %s. Will not try dialling`, id)
+//     return
+//   }
+//
+//   for (const addr of multiaddrs) {
+//     try {
+//       // console.log(`dialing multiaddr: %o`, addr)
+//       await server.dial(addr)
+//       return // if we succeed dialing the peer, no need to try another address
+//     } catch (error) {
+//       console.error(`failed to dial multiaddr: %o`, addr)
+//     }
+//   }
+// })
 
-  if (server.getConnections(id)?.length > 0) {
-    console.log(`Already connected to peer %s. Will not try dialling`, id)
+// server.services.pubsub.addEventListener('gossipsub:heartbeat', async (evt) => {
+//   console.log('gossip heartbeat', evt.detail)
+// })
+
+server.services.pubsub.addEventListener('gossipsub:graft', async (evt) => {
+  // ignore graft to relay
+  if (evt.detail.peerId === '12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz') {
     return
   }
 
-  for (const addr of multiaddrs) {
-    try {
-      console.log(`dialing multiaddr: %o`, addr)
-      await server.dial(addr)
-      return // if we succeed dialing the peer, no need to try another address
-    } catch (error) {
-      console.error(`failed to dial multiaddr: %o`, addr)
-    }
-  }
+  console.log('gossip gossip:graft', evt.detail)
 })
+
+server.services.pubsub.addEventListener('gossipsub:prune', async (evt) => {
+  // ignore graft to relay
+  if (evt.detail.peerId === '12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz') {
+    return
+  }
+  console.log('gossip gossip:prune', evt.detail)
+})
+
+// server.services.pubsub.addEventListener('gossipsub:message', async (evt) => {
+//   console.log('relay gossip:message', evt.detail)
+// })
 
 const fastify = Fastify({
-  logger: true
+  logger: false
 })
 
-fastify.get('/', async function handler (request, reply) {
+fastify.get('/', async function handler(request, reply) {
   reply.header("Access-Control-Allow-Origin", "*");
   reply.header("Access-Control-Allow-Header", "*");
   reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 
-  const peerList = server.services.pubsub.getSubscribers(topic)
+  const subscriberList = server.services.pubsub.getSubscribers(topic)
+  const peerList = server.services.pubsub.getPeers()
+  const connections = server.getConnections()
 
-  return { 
+  return {
     peerId: server.peerId.toString(),
-    peerList: peerList.map((peerId) => peerId.toString()),
+    subscribers: subscriberList.map((peerId) => peerId.toString()),
+    peers: peerList.map((peerId) => peerId.toString()),
+    connections: connections.map((connection) => connection.remotePeer.toString()),
+    topics: server.services.pubsub.getTopics(),
     type: 'gossip'
   }
 })
@@ -125,10 +165,10 @@ try {
   //   console.log('Gossip Peers: ', peerList)
   // }, 1000)
 
-  // setInterval(async () => {
-  //   const res = await server.services.pubsub.publish(topic, fromString('hello world'))
-  //   console.log('published message', res)
-  // }, 5000)
+  setInterval(async () => {
+    const res = await server.services.pubsub.publish(topic, fromString('hello world'))
+    console.log('published message', res)
+  }, 5000)
 } catch (err) {
   console.log(err)
 }

@@ -53,7 +53,6 @@ if (process.env.TOPIC !== undefined) {
 }
 
 const pKey = await keys.generateKeyPairFromSeed('Ed25519', hexStringToUint8Array(seed))
-
 const server = await createLibp2p({
   privateKey: pKey,
   addresses: {
@@ -71,6 +70,9 @@ const server = await createLibp2p({
       listenOnly: false
     })
   ],
+  connectionManager: {
+    maxConnections: Infinity
+  },
   services: {
     identify: identify(),
     relay: circuitRelayServer({
@@ -80,15 +82,36 @@ const server = await createLibp2p({
     }),
     pubsub: gossipsub({
       doPX: true,
+      emitSelf: false,
+      scoreParams: {
+        IPColocationFactorWeight: 0,
+        behaviourPenaltyWeight: 0
+      },
     }),
   }
 })
+
+// server.services.pubsub.addEventListener('gossipsub:heartbeat', async (evt) => {
+//   console.log('relay heartbeat', evt.detail)
+// })
+
+server.services.pubsub.addEventListener('gossipsub:graft', async (evt) => {
+  console.log('relay gossip:graft', evt.detail)
+})
+
+server.services.pubsub.addEventListener('gossipsub:prune', async (evt) => {
+  console.log('relay gossip:prune', evt.detail)
+})
+
+// server.services.pubsub.addEventListener('gossipsub:message', async (evt) => {
+//   console.log('relay gossip:message', evt.detail)
+// })
 
 server.services.pubsub.subscribe(topic)
 console.log('Relay listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
 const fastify = Fastify({
-  logger: true
+  logger: false
 })
 
 fastify.get('/', async function handler(request, reply) {
@@ -96,11 +119,16 @@ fastify.get('/', async function handler(request, reply) {
   reply.header("Access-Control-Allow-Header", "*");
   reply.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
 
-  const peerList = server.services.pubsub.getSubscribers(topic)
+  const subscriberList = server.services.pubsub.getSubscribers(topic)
+  const peerList = server.services.pubsub.getPeers()
+  const connections = server.getConnections()
 
   return {
     peerId: server.peerId.toString(),
-    peerList: peerList.map((peerId) => peerId.toString()),
+    subscribers: subscriberList.map((peerId) => peerId.toString()),
+    peers: peerList.map((peerId) => peerId.toString()),
+    connections: connections.map((connection) => connection.remotePeer.toString()),
+    topics: server.services.pubsub.getTopics(),
     type: 'relay'
   }
 })
@@ -112,7 +140,7 @@ try {
   process.exit(1)
 }
 
-setInterval(() => {
-  const peerList = server.services.pubsub.getSubscribers(topic)
-  console.log('Relay Gossip Peers: ', peerList)
-}, 1000)
+// setInterval(() => {
+//   const peerList = server.services.pubsub.getSubscribers(topic)
+//   console.log('Relay Gossip Peers: ', peerList)
+// }, 1000)
