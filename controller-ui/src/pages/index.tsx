@@ -35,6 +35,7 @@ export default function Home() {
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
   const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
   const [mapType, setMapType] = useState<MapType>('connections');
+  const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -191,7 +192,7 @@ export default function Home() {
       const data = containerData[containerId];
 
       const connectionList = data && data[mapType]
-      console.log({mapType, connectionList})
+      console.log({ mapType, connectionList })
       if (connectionList && Array.isArray(connectionList)) {
         connectionList.forEach((peerId) => {
           // Find the container that has this peerId
@@ -245,7 +246,7 @@ export default function Home() {
     const interval = setInterval(() => {
       fetchContainers()
       pollContainers()
-    }, 100)
+    }, 200)
     return () => clearInterval(interval);
   }, [containers, fetchContainers]);
 
@@ -305,6 +306,13 @@ export default function Home() {
                 const x2 = toRect.left + toRect.width / 2 - svgRect.left;
                 const y2 = toRect.top + toRect.height / 2 - svgRect.top;
 
+                // Determine the stroke color based on hover state
+                const isConnectedToHovered =
+                  hoveredContainerId &&
+                  (conn.from === hoveredContainerId || conn.to === hoveredContainerId);
+
+                const strokeColor = isConnectedToHovered ? 'white' : `#${conn.from.substring(0, 6)}`;
+
                 return (
                   <line
                     key={index}
@@ -312,7 +320,7 @@ export default function Home() {
                     y1={y1}
                     x2={x2}
                     y2={y2}
-                    stroke={`#${conn.from.substring(0, 6)}`}
+                    stroke={strokeColor}
                     strokeWidth="2"
                   />
                 );
@@ -339,6 +347,8 @@ export default function Home() {
                 ref={(el) => { containerRefs.current[container.id] = el; }}
                 className="container-item"
                 onClick={() => stopContainer(container.id)}
+                onMouseEnter={() => setHoveredContainerId(container.id)}
+                onMouseLeave={() => setHoveredContainerId(null)}
                 style={{
                   width: `${itemSize}px`,
                   height: `${itemSize}px`,
@@ -347,7 +357,7 @@ export default function Home() {
                   fontSize: `${fontSize}px`,
                   backgroundColor: `#${container.id.substring(0, 6)}`
                 }}
-                title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
+                title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
               >
                 {container.image}
               </div>

@@ -165,10 +165,10 @@ try {
   //   console.log('Gossip Peers: ', peerList)
   // }, 1000)
 
-  setInterval(async () => {
-    const res = await server.services.pubsub.publish(topic, fromString('hello world'))
-    console.log('published message', res)
-  }, 5000)
+  // setInterval(async () => {
+  //   const res = await server.services.pubsub.publish(topic, fromString('hello world'))
+  //   console.log('published message', res)
+  // }, 5000)
 } catch (err) {
   console.log(err)
 }

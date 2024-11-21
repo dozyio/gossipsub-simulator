@@ -304,7 +304,7 @@ func StopContainer(containerID string) error {
 	if !containerJSON.State.Running {
 		fmt.Printf("Container %s is not running; skipping stop.\n", containerID)
 	} else {
-		if err := DockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		if err := DockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout, Signal: "SIGKILL"}); err != nil {
 			return fmt.Errorf("failed to stop container %s: %w", containerID, err)
 		}
 		fmt.Printf("Container %s stopped successfully.\n", containerID)
