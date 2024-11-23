@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { fromString } from 'uint8arrays'
 import { useEffect, useRef, useState } from 'react';
 
 interface PortMapping {
@@ -19,23 +20,27 @@ interface ContainerInfo {
 
 interface ContainerData {
   peerId: string;
-  peers: string[];
+  pubsubPeers: string[];
+  libp2pPeers: string[];
   subscribers: string[];
   connections: string[];
   topics: string[];
   type: string;
+  lastMessage: string;
 }
 
-type MapType = 'peers' | 'subscribers' | 'connections';
+type MapType = 'pubsubPeers' | 'libp2pPeers' | 'subscribers' | 'connections';
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [imageName, setImageName] = useState<string>('gossip:dev');
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
+  const containerSockets = useRef<{ [id: string]: WebSocket | null }>({});
   const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
   const [mapType, setMapType] = useState<MapType>('connections');
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
+  const [converge, setConverge] = useState<boolean>(false);
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -74,7 +79,7 @@ export default function Home() {
       }
 
       const data = await response.json();
-      console.log('Container started:', data);
+      console.log('Bootstrap Container started:', data);
       fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error starting container:', error);
@@ -108,11 +113,10 @@ export default function Home() {
     }
   };
 
-  // Function to start 10 containers
-  const startTenContainers = async () => {
+  const startXContainers = async () => {
     try {
       const promises = [];
-      for (let i = 0; i < 10; i++) {
+      for (let i = 0; i < 12; i++) {
         promises.push(
           fetch('http://localhost:8080/containers/create', {
             method: 'POST',
@@ -133,7 +137,6 @@ export default function Home() {
           throw new Error(`Error starting container: ${errorText}`);
         }
       }
-      console.log('10 containers started');
       fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error starting containers:', error);
@@ -177,12 +180,151 @@ export default function Home() {
         throw new Error(`Error stopping all containers: ${errorText}`);
       }
 
-      console.log('All containers stopped');
       fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error stopping all containers:', error);
     }
   };
+
+  const stopXContainers = async (amount = 10) => {
+    const shuffled = containers.slice();
+
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      // Generate a random index from 0 to i
+      const j = Math.floor(Math.random() * (i + 1));
+      // Swap elements at indices i and j
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    // Return the first x elements
+    const toStop = shuffled.slice(0, amount);
+
+    for (const container of toStop) {
+      try {
+        if (containerData[container.id].type === 'relay') {
+          continue;
+        }
+
+        const response = await fetch('http://localhost:8080/containers/stop', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            container_id: container.id,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Error stopping all containers: ${errorText}`);
+        }
+
+        // fetchContainers(); // Refresh the container list
+      } catch (error) {
+        console.error('Error stopping all containers:', error);
+      }
+    }
+  };
+
+  const getRandomColor = () => {
+    const letters = '0123456789ABCDEF';
+    let color = '#';
+    for (let i = 0; i < 6; i++) {
+      color += letters[Math.floor(Math.random() * 16)];
+    }
+    return color;
+  }
+
+  const publishToTopic = async (amount = 1000) => {
+    setConverge(true)
+    try {
+      // Extract all WebSocket instances, filtering out nulls
+      const sockets = Object.values(containerSockets.current).filter(
+        (socket): socket is WebSocket => socket !== null
+      );
+
+      if (sockets.length === 0) {
+        console.warn('No active WebSocket connections available.');
+        return null;
+      }
+
+      for (let i = 0; i < amount; i++) {
+        // Generate a random index
+        const randomIndex = Math.floor(Math.random() * sockets.length);
+
+        // Return the randomly selected WebSocket
+        const s = sockets[randomIndex]
+
+        s.send(fromString(getRandomColor()))
+      }
+
+      console.log('Message published to topic');
+    } catch (error) {
+      console.error('Error publishing to topic:', error);
+    }
+  };
+
+  // Manage WebSocket connections
+  useEffect(() => {
+    containers.forEach((container) => {
+      // If we don't already have a WebSocket connection for this container
+      if (!containerSockets.current[container.id]) {
+        // Find the public port that maps to container's port 80
+        const portMapping = container.ports.find(
+          (port) => port.private_port === 80 && port.type === 'tcp'
+        );
+        if (portMapping && portMapping.public_port) {
+          const wsUrl = `ws://localhost:${portMapping.public_port}/`;
+          const ws = new WebSocket(wsUrl);
+
+          ws.onopen = () => {
+            console.log(`WebSocket connected for container ${container.id}`);
+          };
+
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              setContainerData((prevData) => ({
+                ...prevData,
+                [container.id]: data,
+              }));
+            } catch (error) {
+              console.error(
+                `Error parsing WebSocket message from container ${container.id}:`,
+                error
+              );
+            }
+          };
+
+          ws.onerror = (error) => {
+            console.error(`WebSocket error for container ${container.id}:`, error);
+          };
+
+          ws.onclose = () => {
+            console.log(`WebSocket closed for container ${container.id}`);
+            // Remove the WebSocket from the map
+            containerSockets.current[container.id] = null;
+          };
+
+          // Store the WebSocket
+          containerSockets.current[container.id] = ws;
+        }
+      }
+    });
+
+    // Clean up WebSocket connections for containers that no longer exist
+    Object.keys(containerSockets.current).forEach((containerId) => {
+      if (!containers.find((c) => c.id === containerId)) {
+        // Container no longer exists, close the WebSocket
+        const ws = containerSockets.current[containerId];
+        if (ws) {
+          ws.close();
+        }
+        containerSockets.current[containerId] = null;
+      }
+    });
+  }, [containers]);
 
   // Update connections based on containerData
   useEffect(() => {
@@ -192,7 +334,6 @@ export default function Home() {
       const data = containerData[containerId];
 
       const connectionList = data && data[mapType]
-      console.log({ mapType, connectionList })
       if (connectionList && Array.isArray(connectionList)) {
         connectionList.forEach((peerId) => {
           // Find the container that has this peerId
@@ -214,42 +355,11 @@ export default function Home() {
   }, [containerData, mapType]);
 
   useEffect(() => {
-    const pollContainers = () => {
-      if (containers.length === 0) {
-        return
-      }
-
-      console.log('Polling containers');
-      containers.forEach((container) => {
-        console.log('Polling container', container.id);
-        // Get the public port from the container's port mappings
-        const portMapping = container.ports.find((port) => port.type === 'tcp');
-        if (portMapping && portMapping.public_port) {
-          const url = `http://localhost:${portMapping.public_port}/`;
-
-          fetch(url)
-            .then((response) => response.json())
-            .then((data) => {
-              setContainerData((prevData) => ({
-                ...prevData,
-                [container.id]: data,
-              }));
-            })
-            .catch((error) => {
-              console.error(`Error fetching data from container ${container.id}:`, error);
-            });
-        }
-      });
-    };
-
-
     const interval = setInterval(() => {
       fetchContainers()
-      pollContainers()
     }, 200)
     return () => clearInterval(interval);
   }, [containers, fetchContainers]);
-
 
   return (
     <>
@@ -261,8 +371,6 @@ export default function Home() {
       </Head>
       <div className="app-container">
         <div className="sidebar">
-          <h1>Gossip Simulator</h1>
-
           {/* Input box for Docker image name */}
           <div className="input-group">
             <label>
@@ -282,11 +390,16 @@ export default function Home() {
           {/* Buttons */}
           <button onClick={startBootstrap}>Start Bootstrap</button>
           <button onClick={startContainer}>Start Container</button>
-          <button onClick={startTenContainers}>Start 10 Containers</button>
-          <button onClick={stopAllContainers}>Stop All Containers</button>
+          <button onClick={startXContainers}>Start 12 Containers</button>
+          <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All Containers</button>
+          <button onClick={() => stopXContainers(10)}>Stop Some Containers</button>
           <button onClick={() => setMapType('connections')}>Show Connections</button>
-          <button onClick={() => setMapType('peers')}>Show Known Peers</button>
+          <button onClick={() => setMapType('pubsubPeers')}>Show Pubsub Peers</button>
+          <button onClick={() => setMapType('libp2pPeers')}>Show Libp2p Peers</button>
           <button onClick={() => setMapType('subscribers')}>Show Subscribers</button>
+          <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
+          <button onClick={() => publishToTopic(1)}>Publish to topic</button>
+          <button onClick={() => publishToTopic(1000)}>Publish 1000 to topic</button>
         </div>
         <div className="container-circle">
           <svg className="connections">
@@ -355,14 +468,17 @@ export default function Home() {
                   lineHeight: `${itemSize}px`,
                   transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                   fontSize: `${fontSize}px`,
-                  backgroundColor: `#${container.id.substring(0, 6)}`
+                  backgroundColor: `${converge ? containerData[container.id]?.lastMessage : `#${container.id.substring(0, 6)}`}`
                 }}
                 title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
               >
-                {container.image}
+                {container.image.split(':')[0]}
               </div>
             );
           })}
+        </div>
+        <div className="sidebar">
+          <h1>Gossip Simulator</h1>
         </div>
         <style jsx>{`
         .app-container {

@@ -202,9 +202,10 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int)
 	// Create the container with labels
 	resp, err := cli.ContainerCreate(ctx, &container.Config{
 		Image:        imageName,
-		Env:          []string{"DEBUG=gossip*"},
 		ExposedPorts: exposedPorts,
 		Labels:       labels,
+		Env:          []string{},
+		// Env:          []string{"DEBUG=*"},
 	}, &container.HostConfig{
 		PortBindings: portBindings,
 	}, nil, nil, containerName)

@@ -4,9 +4,11 @@ WORKDIR /app
 
 COPY package.json package-lock.json ./
 
+## copy deps so we can add debugging
+
 COPY . .
 
 # RUN npm ci
 
-CMD [ "node", "gossip-peer.js" ]
+CMD [ "node", "relay.js" ]
 
