@@ -59,7 +59,7 @@ type ContainerLogStreamer struct {
 func ListContainers() ([]ContainerInfo, error) {
 	ctx := context.Background()
 
-	containers, err := DockerClient.ContainerList(ctx, container.ListOptions{All: true})
+	containers, err := DockerClient.ContainerList(ctx, container.ListOptions{All: false})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}

@@ -62,11 +62,16 @@ const server = await createLibp2p({
   services: {
     identify: identify(),
     pubsub: gossipsub({
+      D: 15,
+      Dlo: 10,
+      Dhi: 20,
+      DLazy: 15,
       doPX: true,
       emitSelf: false,
+      allowPublishToZeroTopicPeers: true, // don't throw if no peers
       scoreParams: {
         IPColocationFactorWeight: 0,
-        behaviourPenaltyWeight: 0,
+        // behaviourPenaltyWeight: 0,
         appSpecificScore: applicationScore
       },
       scoreThresholds: {
@@ -76,9 +81,6 @@ const server = await createLibp2p({
         acceptPXThreshold: 100,
         opportunisticGraftThreshold: 5,
       },
-      D: 5,
-      Dlo: 4,
-      Dhi: 6,
     }),
     ping: ping(),
   }
@@ -110,23 +112,51 @@ server.services.pubsub.addEventListener('message', (evt) => {
 
 server.services.pubsub.subscribe(topic)
 
-let isAlive = true
-
 const type = 'relay'
 const peerId = server.peerId.toString()
+
+const getStreams = () => {
+  const connections = server.getConnections();
+
+  return connections.reduce((accumulator, connection) => {
+    // Ensure the connection has streams and a valid remotePeer
+    if (connection.streams && connection.streams.length > 0 && connection.remotePeer) {
+      const peerId = connection.remotePeer.toString();
+
+      // Initialize the array for this peerId if it doesn't exist
+      if (!accumulator[peerId]) {
+        accumulator[peerId] = [];
+      }
+
+      // Map the streams to the desired format and append them to the peer's array
+      const mappedStreams = connection.streams.map(stream => ({
+        protocol: stream.protocol,
+        direction: stream.direction
+      }));
+
+      accumulator[peerId].push(...mappedStreams);
+    }
+
+    return accumulator;
+  }, {}); // Initialize accumulator as an empty object
+};
 
 // initial state
 let topics = server.services.pubsub.getTopics()
 let subscriberList = server.services.pubsub.getSubscribers(topic)
 let pubsubPeerList = server.services.pubsub.getPeers()
 let libp2pPeerList = await server.peerStore.all()
+let meshPeerList = server.services.pubsub.getMeshPeers(topic)
 let connectionList = server.getConnections()
 
 let subscribers = subscriberList.map((peerId) => peerId.toString())
 let pubsubPeers = pubsubPeerList.map((peerId) => peerId.toString())
 let libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
+let meshPeers = meshPeerList.map((peer) => peer.toString())
 let connections = connectionList.map((connection) => connection.remotePeer.toString())
+let streams = getStreams()
 
+let isAlive = true
 const heartbeat = () => {
   isAlive = true;
 }
@@ -137,8 +167,24 @@ wss.on('connection', function connection(ws) {
   ws.on('error', console.error);
   ws.on('pong', heartbeat);
   ws.on('message', function incoming(msg) {
-    message = toString(msg)
-    server.services.pubsub.publish(topic, fromString(message))
+    const newMessage = JSON.parse(msg)
+
+    switch (newMessage.type) {
+      case 'info':
+        console.log(server.services.pubsub.dumpPeerScoreStats())
+        break;
+      case 'publish':
+        message = newMessage.message
+        try {
+          server.services.pubsub.publish(topic, fromString(message))
+        } catch (e) {
+          console.log(e)
+        }
+        break;
+      default:
+        console.log('unknown message type', newMessage.type)
+        break;
+    }
   });
 
   const updateData = {
@@ -147,6 +193,7 @@ wss.on('connection', function connection(ws) {
     pubsubPeers,
     libp2pPeers,
     connections,
+    streams,
     topics,
     type,
     lastMessage,
@@ -155,21 +202,20 @@ wss.on('connection', function connection(ws) {
   ws.send(JSON.stringify(updateData));
 });
 
-const interval = setInterval(function ping() {
-  wss.clients.forEach(function each(ws) {
-    if (ws.isAlive === false) return ws.terminate();
-
-    ws.isAlive = false;
-    ws.ping();
-  });
-}, 30000);
+// const interval = setInterval(function ping() {
+//   wss.clients.forEach(function each(ws) {
+//     if (ws.isAlive === false) return ws.terminate();
+//
+//     ws.isAlive = false;
+//     ws.ping();
+//   });
+// }, 30000);
 
 wss.on('close', function close() {
   clearInterval(interval);
 });
 
-
-setInterval(async() => {
+setInterval(async () => {
   let subscribersChanged = false;
   const newSubscriberList = server.services.pubsub.getSubscribers(topic)
   const newSubscribers = newSubscriberList.map((peerId) => peerId.toString())
@@ -197,6 +243,15 @@ setInterval(async() => {
     libp2pPeersChanged = true;
   }
 
+  let meshPeersChanged = false;
+  const newMeshPeerList = await server.services.pubsub.getMeshPeers(topic)
+  const newMeshPeers = newMeshPeerList.map((peer) => peer.toString())
+
+  if (!isEqual(meshPeers, newMeshPeers)) {
+    meshPeers = newMeshPeers
+    meshPeersChanged = true;
+  }
+
   let connectionsChanged = false;
   const newConnectionsList = server.getConnections()
   const newConnections = newConnectionsList.map((connection) => connection.remotePeer.toString())
@@ -206,23 +261,33 @@ setInterval(async() => {
     connectionsChanged = true;
   }
 
+  let streamsChanged = false;
+  const newStreams = getStreams()
+
+  if (!isEqual(streams, newStreams)) {
+    streams = newStreams
+    streamsChanged = true;
+  }
+
   let lastMessageChanged = false;
   if (lastMessage !== message) {
     lastMessage = message
     lastMessageChanged = true;
   }
 
-  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || connectionsChanged || lastMessageChanged) {
+  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
     // Prepare the data to send
     const updateData = {
       peerId,
       subscribers,
       pubsubPeers,
       libp2pPeers,
+      meshPeers,
       connections,
+      streams,
       topics: server.services.pubsub.getTopics(),
       type,
-      lastMessage
+      lastMessage,
     };
 
     // Send the data to all connected WebSocket clients
