@@ -1,3 +1,5 @@
+.PHONY: build ui controller stop
+
 build:
 	cd nodes && make build
 
