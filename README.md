@@ -4,6 +4,11 @@
 
 ## Usage
 
+### Setup docker network
+```
+make net
+```
+
 ### Build Bootstrap/Relay and Gossipsub Nodes
 ```
 make build

@@ -18,6 +18,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -108,9 +109,11 @@ func StartContainer(containerID string) error {
 
 func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
-		Image string `json:"image"`
-		Name  string `json:"name,omitempty"`
-		Port  int    `json:"port,omitempty"`
+		Image    string   `json:"image"`
+		Name     string   `json:"name,omitempty"`
+		Port     int      `json:"port,omitempty"`
+		Env      []string `json:"env,omitempty"`
+		Hostname string   `json:"hostname,omitempty"`
 	}
 
 	var reqBody RequestBody
@@ -124,7 +127,13 @@ func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	containerID, hostPort, err := CreateAndStartContainer(reqBody.Image, reqBody.Name, reqBody.Port)
+	containerID, hostPort, err := CreateAndStartContainer(
+		reqBody.Image,
+		reqBody.Name,
+		reqBody.Port,
+		reqBody.Env,
+		reqBody.Hostname,
+	)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create and start container: %v", err), http.StatusInternalServerError)
 		return
@@ -155,9 +164,38 @@ func imageExists(cli *client.Client, ctx context.Context, imageName string) (boo
 	return false, nil
 }
 
-func CreateAndStartContainer(imageName, containerName string, containerPort int) (string, int, error) {
+// EnsureNetwork ensures that the specified Docker network exists.
+// If the network does not exist, it creates one with the given name.
+func EnsureNetwork(cli *client.Client, networkName string) error {
+	ctx := context.Background()
+
+	// List existing networks to check if the network already exists
+	networks, err := cli.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("name", networkName)),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to list networks: %w", err)
+	}
+
+	if len(networks) == 0 {
+		return fmt.Errorf("network %s does not exist", networkName)
+	}
+
+	return nil
+}
+
+func CreateAndStartContainer(imageName, containerName string, containerPort int, env []string, hostname string) (string, int, error) {
 	ctx := context.Background()
 	cli := DockerClient
+
+	networkName := os.Getenv("NETWORK")
+	if networkName == "" {
+		return "", 0, fmt.Errorf("NETWORK environment variable is not set")
+	}
+
+	if err := EnsureNetwork(cli, networkName); err != nil {
+		return "", 0, fmt.Errorf("network setup failed: %w", err)
+	}
 
 	// Check if the image exists locally
 	imageExistsLocally, err := imageExists(cli, ctx, imageName)
@@ -168,6 +206,7 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int)
 	// Pull the image only if it doesn't exist locally
 	if !imageExistsLocally {
 		fmt.Printf("Image %s not found locally. Pulling...\n", imageName)
+
 		reader, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
 		if err != nil {
 			return "", 0, fmt.Errorf("failed to pull image %s: %w", imageName, err)
@@ -199,16 +238,36 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int)
 		"managed_by": appLabel,
 	}
 
-	// Create the container with labels
-	resp, err := cli.ContainerCreate(ctx, &container.Config{
+	// for _, e := range env {
+	// 	fmt.Printf("ENV: %s\n", e)
+	// }
+	// env = append(env, "DEBUG=*trace")
+
+	config := &container.Config{
 		Image:        imageName,
 		ExposedPorts: exposedPorts,
 		Labels:       labels,
-		Env:          []string{},
-		// Env:          []string{"DEBUG=*"},
-	}, &container.HostConfig{
+		Env:          env,
+	}
+
+	if hostname != "" {
+		config.Hostname = hostname
+	}
+
+	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
-	}, nil, nil, containerName)
+		NetworkMode:  container.NetworkMode(networkName),
+	}
+
+	// Create the container with labels
+	resp, err := cli.ContainerCreate(
+		ctx,
+		config,
+		hostConfig,
+		nil,
+		nil,
+		containerName,
+	)
 	if err != nil {
 		return "", 0, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -227,6 +286,7 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int)
 	}
 
 	var hostPort int
+
 	portInfo, ok := containerJSON.NetworkSettings.Ports[nat.Port(fmt.Sprintf("%d/tcp", containerPort))]
 	if ok && len(portInfo) > 0 {
 		hostPort, _ = strconv.Atoi(portInfo[0].HostPort)
@@ -281,6 +341,99 @@ func startLogStreaming(containerID string) {
 	}
 }
 
+// func startLogStreaming(containerID string) {
+// 	ctx := context.Background()
+//
+// 	// Create a log streamer
+// 	streamer := &ContainerLogStreamer{
+// 		containerID: containerID,
+// 		stopChan:    make(chan struct{}),
+// 	}
+//
+// 	// Add the streamer to the map
+// 	logStreamersMutex.Lock()
+// 	logStreamers[containerID] = streamer
+// 	logStreamersMutex.Unlock()
+//
+// 	// Options for logs
+// 	options := container.LogsOptions{
+// 		ShowStdout: true,
+// 		ShowStderr: true,
+// 		Follow:     true,
+// 		Tail:       "all",
+// 	}
+//
+// 	// Get the logs
+// 	out, err := DockerClient.ContainerLogs(ctx, containerID, options)
+// 	if err != nil {
+// 		fmt.Printf("Error getting logs for container %s: %v\n", containerID, err)
+// 		return
+// 	}
+// 	defer out.Close()
+//
+// 	// Create a pipe to handle stdout and stderr
+// 	stdout := make(chan string)
+// 	stderr := make(chan string)
+//
+// 	// Goroutine to demultiplex the logs
+// 	go func() {
+// 		// stdcopy.StdCopy writes stdout and stderr to separate writers
+// 		// Here, we'll use io.Pipe to capture them
+// 		stdoutPipeReader, stdoutPipeWriter := io.Pipe()
+// 		stderrPipeReader, stderrPipeWriter := io.Pipe()
+//
+// 		go func() {
+// 			defer stdoutPipeWriter.Close()
+// 			defer stderrPipeWriter.Close()
+//
+// 			_, err := stdcopy.StdCopy(stdoutPipeWriter, stderrPipeWriter, out)
+// 			if err != nil {
+// 				fmt.Printf("Error demultiplexing logs for container %s: %v\n", containerID, err)
+// 			}
+// 		}()
+//
+// 		// Scan stdout
+// 		scanner := bufio.NewScanner(stdoutPipeReader)
+// 		for scanner.Scan() {
+// 			line := scanner.Text()
+// 			stdout <- line
+// 		}
+//
+// 		if err := scanner.Err(); err != nil {
+// 			fmt.Printf("Error reading stdout for container %s: %v\n", containerID, err)
+// 		}
+//
+// 		close(stdout)
+//
+// 		// Scan stderr
+// 		scannerErr := bufio.NewScanner(stderrPipeReader)
+// 		for scannerErr.Scan() {
+// 			line := scannerErr.Text()
+// 			stderr <- line
+// 		}
+// 		if err := scannerErr.Err(); err != nil {
+// 			fmt.Printf("Error reading stderr for container %s: %v\n", containerID, err)
+// 		}
+// 		close(stderr)
+// 	}()
+//
+// 	// Listen for log lines
+// 	for {
+// 		select {
+// 		case <-streamer.stopChan:
+// 			return
+// 		case line, ok := <-stdout:
+// 			if ok {
+// 				fmt.Printf("[%s] %s\n", containerID[:8], line)
+// 			}
+// 		case line, ok := <-stderr:
+// 			if ok {
+// 				fmt.Printf("[%s][err] %s\n", containerID[:8], line)
+// 			}
+// 		}
+// 	}
+// }
+
 func stopLogStreaming(containerID string) {
 	logStreamersMutex.Lock()
 	defer logStreamersMutex.Unlock()
@@ -308,6 +461,7 @@ func StopContainer(containerID string) error {
 		if err := DockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout, Signal: "SIGKILL"}); err != nil {
 			return fmt.Errorf("failed to stop container %s: %w", containerID, err)
 		}
+
 		fmt.Printf("Container %s stopped successfully.\n", containerID)
 	}
 
@@ -335,18 +489,23 @@ func StopAllContainers() error {
 		// Stop the container if it's running
 		if c.State == "running" {
 			fmt.Printf("Stopping container %s...\n", c.ID)
+
 			timeout := 0
+
 			if err := DockerClient.ContainerStop(ctx, c.ID, container.StopOptions{Timeout: &timeout}); err != nil {
 				errMsg := fmt.Sprintf("failed to stop container %s: %v", c.ID, err)
 				fmt.Println(errMsg)
 				errorsList = append(errorsList, errMsg)
+
 				continue
 			}
+
 			fmt.Printf("Container %s stopped successfully.\n", c.ID)
 		}
 
 		// Remove the container
 		fmt.Printf("Removing container %s...\n", c.ID)
+
 		if err := DockerClient.ContainerRemove(ctx, c.ID, container.RemoveOptions{}); err != nil {
 			errMsg := fmt.Sprintf("failed to remove container %s: %v", c.ID, err)
 			fmt.Println(errMsg)
@@ -371,7 +530,9 @@ func RemoveContainer(containerID string) error {
 	if err := DockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
 		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
 	}
+
 	fmt.Printf("Container %s removed successfully.\n", containerID)
+
 	return nil
 }
 
@@ -486,9 +647,18 @@ func cleanup() {
 func main() {
 	var err error
 
+	networkName := os.Getenv("NETWORK")
+	if networkName == "" {
+		log.Fatalf("NETWORK environment variable is not set")
+	}
+
 	DockerClient, err = client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		log.Fatalf("Failed to create Docker client: %v", err)
+	}
+
+	if err := EnsureNetwork(DockerClient, networkName); err != nil {
+		log.Fatalf("NETWORK %s does not exist", networkName)
 	}
 
 	// Register handlers

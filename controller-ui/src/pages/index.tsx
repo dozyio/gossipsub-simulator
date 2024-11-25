@@ -1,5 +1,4 @@
 import Head from "next/head";
-import { fromString } from 'uint8arrays'
 import { useEffect, useRef, useState } from 'react';
 
 interface PortMapping {
@@ -43,6 +42,8 @@ interface ContainerData {
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'subscribers' | 'connections' | 'streams';
 type ClickType = 'kill' | 'info'
 
+const DEBUG_STRING = 'DEBUG=*'
+
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [imageName, setImageName] = useState<string>('gossip:dev');
@@ -57,6 +58,7 @@ export default function Home() {
   const [autoPublish, setAutoPublish] = useState<boolean>(false);
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
+  const [debugContainer, setDebugContainer] = useState<boolean>(false);
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -88,8 +90,7 @@ export default function Home() {
     }
   };
 
-  // Function to start a relay container
-  const startBootstrap = async () => {
+  const startContainer = async (image: string, env: string[], hostname: string = ""): Promise<ContainerInfo | void> => {
     try {
       const response = await fetch('http://localhost:8080/containers/create', {
         method: 'POST',
@@ -97,7 +98,9 @@ export default function Home() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          image: 'relay:dev',
+          image,
+          env,
+          hostname,
           port: 80,
         }),
       });
@@ -109,64 +112,72 @@ export default function Home() {
 
       const data = await response.json();
       console.log('Bootstrap Container started:', data);
-      fetchContainers(); // Refresh the container list
+      await fetchContainers(); // Refresh the container list
+      return data
     } catch (error) {
       console.error('Error starting container:', error);
     }
+  }
+
+  // Function to start a bootstrapper container
+  const handleStartBootstrap1 = async () => {
+    // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
+    const env = [
+      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
+    ]
+
+    if (debugContainer) {
+      env.push(DEBUG_STRING)
+    }
+
+    await startContainer('bootstrapper:dev', env, "bootstrapper1")
+  };
+  const handleStartBootstrap2 = async () => {
+    // 12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw
+    const env = [
+      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
+    ]
+
+    if (debugContainer) {
+      env.push(DEBUG_STRING)
+    }
+
+    await startContainer('bootstrapper:dev', env, "bootstrapper2")
   };
 
   // Function to start a new container
-  const startContainer = async () => {
-    try {
-      const response = await fetch('http://localhost:8080/containers/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          image: imageName,
-          port: 80,
-        }),
-      });
+  const handleStartContainer = async () => {
+    const env = []
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error starting container: ${errorText}`);
-      }
-
-      const data = await response.json();
-      console.log('Container started:', data);
-      fetchContainers(); // Refresh the container list
-    } catch (error) {
-      console.error('Error starting container:', error);
+    if (debugContainer) {
+      env.push(DEBUG_STRING)
     }
+
+    await startContainer(imageName, env)
   };
 
-  const startXContainers = async () => {
+  const handleStartXContainers = async () => {
+    const env = []
+
+    if (debugContainer) {
+      env.push(DEBUG_STRING)
+    }
+
     try {
       const promises = [];
       for (let i = 0; i < 12; i++) {
         promises.push(
-          fetch('http://localhost:8080/containers/create', {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              image: imageName,
-              port: 80,
-            }),
-          })
+          startContainer(imageName, env)
         );
       }
-      const responses = await Promise.all(promises);
-      for (const response of responses) {
-        if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Error starting container: ${errorText}`);
-        }
-      }
-      fetchContainers(); // Refresh the container list
+      await Promise.all(promises);
+      // for (const response of responses) {
+      //   if (!response.ok) {
+      //     const errorText = await response.text();
+      //     throw new Error(`Error starting container: ${errorText}`);
+      //   }
+      // }
+      await fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error starting containers:', error);
     }
@@ -191,7 +202,7 @@ export default function Home() {
       }
 
       console.log(`Container ${containerID} stopped`);
-      fetchContainers(); // Refresh the container list
+      await fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error stopping container:', error);
     }
@@ -209,7 +220,7 @@ export default function Home() {
         throw new Error(`Error stopping all containers: ${errorText}`);
       }
 
-      fetchContainers(); // Refresh the container list
+      await fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error stopping all containers:', error);
     }
@@ -230,7 +241,7 @@ export default function Home() {
 
     for (const container of toStop) {
       try {
-        if (containerData[container.id].type === 'relay') {
+        if (containerData[container.id].type === 'bootstrapper') {
           continue;
         }
 
@@ -291,7 +302,6 @@ export default function Home() {
           message: getRandomColor()
         }
 
-        // s.send(fromString(getRandomColor()))
         s.send(JSON.stringify(message))
       }
 
@@ -363,6 +373,37 @@ export default function Home() {
 
   // Manage WebSocket connections
   useEffect(() => {
+    // Function to handle WebSocket messages and update containerData
+    const handleWebSocketMessage = (containerId: string, data: ContainerData) => {
+      setContainerData((prevData) => ({
+        ...prevData,
+        [containerId]: {
+          ...prevData[containerId],
+          ...data, // Merge new data with existing containerData
+        },
+      }));
+
+      // Extract protocols from streams
+      if (data.streams) {
+        const newProtocols = new Set<string>();
+        Object.values(data.streams).forEach((streamsArray) => {
+          streamsArray.forEach((stream) => {
+            newProtocols.add(stream.protocol);
+          });
+        });
+
+        // Update the protocols state with new unique protocols
+        setProtocols((prevProtocols) => {
+          const updatedProtocols = [...prevProtocols];
+          newProtocols.forEach((protocol) => {
+            if (!updatedProtocols.includes(protocol)) {
+              updatedProtocols.push(protocol);
+            }
+          });
+          return updatedProtocols;
+        });
+      }
+    };
     containers.forEach((container) => {
       // If we don't already have a WebSocket connection for this container
       if (!containerSockets.current[container.id]) {
@@ -380,32 +421,8 @@ export default function Home() {
 
           ws.onmessage = (event) => {
             try {
-              const data = JSON.parse(event.data);
-              setContainerData((prevData) => ({
-                ...prevData,
-                [container.id]: data,
-              }));
-
-              // Extract protocols from streams
-              if (data.streams) {
-                const newProtocols = new Set<string>();
-                Object.values(data.streams).forEach((streamsArray) => {
-                  streamsArray.forEach((stream) => {
-                    newProtocols.add(stream.protocol);
-                  });
-                });
-
-                // Update the protocols state with new unique protocols
-                setProtocols((prevProtocols) => {
-                  const updatedProtocols = [...prevProtocols];
-                  newProtocols.forEach((protocol) => {
-                    if (!updatedProtocols.includes(protocol)) {
-                      updatedProtocols.push(protocol);
-                    }
-                  });
-                  return updatedProtocols;
-                });
-              }
+              const data: ContainerData = JSON.parse(event.data);
+              handleWebSocketMessage(container.id, data);
             } catch (error) {
               console.error(
                 `Error parsing WebSocket message from container ${container.id}:`,
@@ -488,8 +505,8 @@ export default function Home() {
   }, [containerData, mapType]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      fetchContainers()
+    const interval = setInterval(async () => {
+      await fetchContainers()
     }, 200)
     return () => clearInterval(interval);
   }, [containers, fetchContainers]);
@@ -499,7 +516,7 @@ export default function Home() {
       if (autoPublish) {
         publishToTopic(1)
       }
-    }, 100)
+    }, 250)
     return () => clearInterval(interval);
   }, [autoPublish]);
 
@@ -530,17 +547,35 @@ export default function Home() {
           <p>{`Showing ${mapType}`}</p>
 
           {/* Buttons */}
-          <button onClick={startBootstrap}>Start Bootstrap</button>
-          <button onClick={startContainer}>Start Container</button>
-          <button onClick={startXContainers}>Start 12 Containers</button>
-          <button onClick={() => stopXContainers(Math.floor(containers.length / 4))}>Stop Some Containers</button>
-          <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All Containers</button>
-          <button onClick={() => setMapType('connections')}>Show Connections</button>
-          <button onClick={() => setMapType('meshPeers')}>Show Mesh Peers</button>
-          <button onClick={() => setMapType('streams')}>Show Streams</button>
-          <button onClick={() => setMapType('subscribers')}>Show Subscribers</button>
-          <button onClick={() => setMapType('pubsubPeers')}>Show Pubsub Peer Store</button>
-          <button onClick={() => setMapType('libp2pPeers')}>Show Libp2p Peer Store</button>
+          <h3>Start Containers</h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+            <button onClick={handleStartBootstrap1}>Bootstrap1</button>
+            <button onClick={handleStartBootstrap2}>Bootstrap2</button>
+            <button onClick={handleStartContainer}>Container</button>
+            <button onClick={handleStartXContainers}>X Containers</button>
+            <label>
+              <input
+                type="checkbox"
+                checked={debugContainer}
+                onChange={() => setDebugContainer(!debugContainer)}
+              />
+              Start with debug
+            </label>
+          </div>
+          <h3>Stop Containers</h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+            <button onClick={() => stopXContainers(Math.floor(containers.length / 4))}>Stop Some</button>
+            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
+          </div>
+          <h3>Show</h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+            <button onClick={() => setMapType('connections')}>Connections</button>
+            <button onClick={() => setMapType('meshPeers')}>Mesh Peers</button>
+            <button onClick={() => setMapType('streams')}>Streams</button>
+            <button onClick={() => setMapType('subscribers')}>Subscribers</button>
+            <button onClick={() => setMapType('pubsubPeers')}>Pubsub Peer Store</button>
+            <button onClick={() => setMapType('libp2pPeers')}>Libp2p Peer Store</button>
+          </div>
 
         </div>
         <div className="container-circle">
@@ -665,7 +700,7 @@ export default function Home() {
                   transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                   fontSize: `${fontSize}px`,
                   backgroundColor: `${converge ? containerData[container.id]?.lastMessage : `#${container.id.substring(0, 6)}`}`,
-                  border: `${containerData[container.id]?.type === 'relay' ? '3px solid white' : '0px'}`
+                  border: `${containerData[container.id]?.type === 'bootstrapper' ? '3px solid white' : '0px'}`
                 }}
                 title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
               >
@@ -684,7 +719,7 @@ export default function Home() {
           {/* Conditionally render protocols when mapType is 'streams' */}
           {mapType === 'streams' && (
             <div className="protocol-list">
-              <h2>Stream Protocols</h2>
+              <h3>Stream Protocols</h3>
               {protocols.length > 0 ? (
                 <div>
                   {/* "Select All" and "Clear Selection" Buttons */}
@@ -726,7 +761,7 @@ export default function Home() {
 
         .sidebar {
           width: 250px;
-          padding: 20px;
+          padding: 15px;
           background-color: #111111;
         }
 
@@ -759,9 +794,8 @@ export default function Home() {
 
         .sidebar button {
           display: block;
-          width: 100%;
           margin-bottom: 10px;
-          padding: 10px;
+          padding: 5px;
           font-size: 16px;
           cursor: pointer;
         }

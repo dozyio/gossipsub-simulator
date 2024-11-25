@@ -13,6 +13,8 @@ import { bootstrap } from '@libp2p/bootstrap'
 import { pubsubPeerDiscovery } from '@libp2p/pubsub-peer-discovery'
 import { isEqual, stringToDialable } from './helpers.js'
 import { multiaddr } from '@multiformats/multiaddr'
+import { peerIdFromString } from '@libp2p/peer-id'
+import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
 import { ping } from '@libp2p/ping'
 
 let topic = 'pubXXX-dev'
@@ -20,11 +22,19 @@ if (process.env.TOPIC !== undefined) {
   topic = process.env.TOPIC
 }
 
-const bootstrapMa = multiaddr('/ip4/172.17.0.2/tcp/42069/ws/p2p/12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz')
-const bootstrapPeerId = '12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz'
+let dhtPrefix = 'local'
+if (process.env.DHTPREFIX !== undefined) {
+  dhtPrefix = process.env.dhtPrefix
+}
+
+const bootstrapper1PeerId = '12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF'
+const bootstrapper1Ma = `/dns/bootstrapper1/tcp/42069/ws/p2p/${bootstrapper1PeerId}`
+
+const bootstrapper2PeerId = '12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw'
+const bootstrapper2Ma = `/dns/bootstrapper2/tcp/42069/ws/p2p/${bootstrapper2PeerId}`
 
 function applicationScore(p) {
-  if (p === bootstrapPeerId) {
+  if (p === bootstrapper1PeerId || p === bootstrapper2PeerId) {
     return 150
   }
 
@@ -43,22 +53,22 @@ const server = await createLibp2p({
   connectionEncrypters: [noise()],
   streamMuxers: [yamux()],
   peerDiscovery: [
-    bootstrap({
-      list: [bootstrapMa]
-    }),
-    pubsubPeerDiscovery()
+    // bootstrap({
+    //   list: [bootstrapMa]
+    // }),
+    // pubsubPeerDiscovery()
   ],
   connectionManager: {
     maxConnections: 20,
   },
   services: {
     identify: identify(),
+    ping: ping(),
     pubsub: gossipsub({
       D: 6,
       Dlo: 4,
       Dhi: 10,
-      Dlazy: 6,
-      doPX: true,
+      doPX: false,
       emitSelf: false,
       allowPublishToZeroTopicPeers: true, // don't throw if no peers
       scoreParams: {
@@ -74,9 +84,16 @@ const server = await createLibp2p({
         opportunisticGraftThreshold: 5,
       },
     }),
-    ping: ping()
+    lanDHT: kadDHT({
+      protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
+      clientMode: true
+      // peerInfoMapper: removePublicAddressesMapper,
+    }),
   }
 })
+
+console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+
 
 let lastMessage = ''
 let message = ''
@@ -90,10 +107,8 @@ server.services.pubsub.addEventListener('message', (evt) => {
   message = toString(evt.detail.data)
 })
 
-
 server.services.pubsub.subscribe(topic)
 
-// server.services.pubsub.addCandidate(bootstrapPeerId, bootstrapMa)
 
 server.addEventListener('peer:discovery', async (evt) => {
   if (!evt.detail.multiaddrs) {
@@ -120,7 +135,7 @@ server.addEventListener('peer:discovery', async (evt) => {
   }
 
   for (const addr of addrs) {
-    server.services.pubsub.addCandidate(evt.detail.id, addr)
+    // server.services.pubsub.addCandidate(evt.detail.id, addr)
   }
 })
 
@@ -315,20 +330,59 @@ setInterval(async () => {
     lastMessageChanged = true;
   }
 
-  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
-    // Prepare the data to send
-    const updateData = {
-      peerId,
-      subscribers,
-      pubsubPeers,
-      libp2pPeers,
-      meshPeers,
-      connections,
-      streams,
-      topics: server.services.pubsub.getTopics(),
-      type,
-      lastMessage,
-    };
+  // if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
+  //   // Prepare the data to send
+  //   const updateData = {
+  //     peerId,
+  //     subscribers,
+  //     pubsubPeers,
+  //     libp2pPeers,
+  //     meshPeers,
+  //     connections,
+  //     streams,
+  //     topics: server.services.pubsub.getTopics(),
+  //     type,
+  //     lastMessage,
+  //   };
+  //
+  //   // Send the data to all connected WebSocket clients
+  //   wss.clients.forEach((ws) => {
+  //     if (ws.readyState === ws.OPEN) {
+  //       ws.send(JSON.stringify(updateData));
+  //     }
+  //   });
+  // }
+
+  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || meshPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
+    const updateData = {}
+
+    if (subscribersChanged) {
+      updateData.subscribers = subscribers
+    }
+
+    if (pubsubPeersChanged) {
+      updateData.pubsubPeers = pubsubPeers
+    }
+
+    if (libp2pPeersChanged) {
+      updateData.libp2pPeers = libp2pPeers
+    }
+
+    if (meshPeersChanged) {
+      updateData.meshPeers = meshPeers
+    }
+
+    if (connectionsChanged) {
+      updateData.connections = connections
+    }
+
+    if (streamsChanged) {
+      updateData.streams = streams
+    }
+
+    if (lastMessageChanged) {
+      updateData.lastMessage = lastMessage
+    }
 
     // Send the data to all connected WebSocket clients
     wss.clients.forEach((ws) => {
@@ -337,9 +391,8 @@ setInterval(async () => {
       }
     });
   }
-}, 100)
 
-console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+}, 100)
 
 // try {
 //   const conn = await server.dial(stringToDialable('/ip4/172.17.0.2/tcp/42069/ws/p2p/12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz'))
@@ -383,24 +436,60 @@ console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().ma
 // }, 5000)
 
 
+try {
+  await server.dial(multiaddr(bootstrapper1Ma))
+} catch (e) {
+  console.log('Error dialing bootstrapper1 peer', e)
+}
+try {
+  await server.dial(multiaddr(bootstrapper2Ma))
+} catch (e) {
+  console.log('Error dialing bootstrapper2 peer', e)
+}
+
+// connect to bootstrapper 1
 setInterval(async () => {
   let hasBootstrapperConn = false
 
-  server.getConnections(bootstrapPeerId).forEach(conn => {
-      hasBootstrapperConn = true
+  server.getConnections(bootstrapper1PeerId).forEach(conn => {
+    hasBootstrapperConn = true
   })
 
   if (!hasBootstrapperConn) {
     try {
-      console.log('dialing bootstrapper...')
-      const bsConn = await server.dial(bootstrapMa)
+      console.log('dialing bootstrapper1...')
+      const bsConn = await server.dial(multiaddr(bootstrapper1Ma))
       if (!bsConn) {
         console.log('no connection')
         return
       }
-      console.log('connected to bootstrapper')
+      console.log('connected to bootstrapper1')
     } catch (e) {
       console.log(e)
     }
   }
 }, 20_000)
+
+// connect to bootstrapper 2
+setInterval(async () => {
+  let hasBootstrapperConn = false
+
+  server.getConnections(bootstrapper2PeerId).forEach(conn => {
+    hasBootstrapperConn = true
+  })
+
+  if (!hasBootstrapperConn) {
+    try {
+      console.log('dialing bootstrapper2...')
+      const bsConn = await server.dial(multiaddr(bootstrapper2Ma))
+      if (!bsConn) {
+        console.log('no connection')
+        return
+      }
+      console.log('connected to bootstrapper2')
+    } catch (e) {
+      console.log(e)
+    }
+  }
+}, 20_000)
+

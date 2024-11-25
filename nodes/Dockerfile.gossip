@@ -11,4 +11,3 @@ COPY . .
 # RUN npm ci
 
 CMD [ "node", "gossip-peer.js" ]
-

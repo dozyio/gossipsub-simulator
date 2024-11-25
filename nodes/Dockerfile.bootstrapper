@@ -10,5 +10,5 @@ COPY . .
 
 # RUN npm ci
 
-CMD [ "node", "relay.js" ]
+CMD [ "node", "bootstrapper.js" ]
 

@@ -14,6 +14,9 @@ import { pubsubPeerDiscovery } from '@libp2p/pubsub-peer-discovery'
 import { isEqual, hexStringToUint8Array } from './helpers.js'
 import { ping } from '@libp2p/ping'
 import { fromString, toString } from 'uint8arrays'
+import { multiaddr } from '@multiformats/multiaddr'
+import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
+import { peerIdFromString } from '@libp2p/peer-id'
 
 let seed = '0x1111111111111111111111111111111111111111111111111111111111111111'
 if (process.env.SEED !== undefined) {
@@ -30,18 +33,79 @@ if (process.env.TOPIC !== undefined) {
   topic = process.env.TOPIC
 }
 
-const bootstrapPeerId = '12D3KooWPqT2nMDSiXUSx5D7fasaxhxKigVhcqfkKqrLghCq9jxz'
+let dhtPrefix = 'local'
+if (process.env.DHTPREFIX !== undefined) {
+  dhtPrefix = process.env.dhtPrefix
+}
+
+//'0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
+const bootstrapper1PeerId = '12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF'
+const bootstrapper1Ma = `/dns/bootstrapper1/tcp/42069/ws/p2p/${bootstrapper1PeerId}`
+
+//'0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
+const bootstrapper2PeerId = '12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw'
+const bootstrapper2Ma = `/dns/bootstrapper2/tcp/42069/ws/p2p/${bootstrapper2PeerId}`
 
 function applicationScore(p) {
-  if (p === bootstrapPeerId) {
-    return 50
+  if (p === bootstrapper1PeerId || p === bootstrapper2PeerId) {
+    return 150
   }
 
   return 0
 }
 
 const pKey = await keys.generateKeyPairFromSeed('Ed25519', hexStringToUint8Array(seed))
-const server = await createLibp2p({
+const gossipsubConfig = {
+  enabled: true,
+  D: 8,
+  Dlo: 6,
+  Dhi: 12,
+  doPX: true,
+  emitSelf: false,
+  allowPublishToZeroTopicPeers: true, // don't throw if no peers
+  scoreParams: {
+    IPColocationFactorWeight: 0,
+    // behaviourPenaltyWeight: 0,
+    appSpecificScore: applicationScore
+  },
+  scoreThresholds: {
+    gossipThreshold: -4000,
+    publishThreshold: -8000,
+    graylistThreshold: -16000,
+    acceptPXThreshold: 100,
+    opportunisticGraftThreshold: 5,
+  },
+  directConnectTicks: 10,
+  // directPeers: [
+  //   {
+  //     id: peerIdFromString(bootstrapper1PeerId),
+  //     addrs: multiaddr(bootstrapper1Ma)
+  //   },
+  //   {
+  //     id: peerIdFromString(bootstrapper2PeerId),
+  //     addrs: multiaddr(bootstrapper2Ma)
+  //   },
+  // ],
+}
+
+if (process.env.SEED === '0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1') {
+  gossipsubConfig.directPeers = [
+    {
+      id: peerIdFromString(bootstrapper2PeerId),
+      addrs: [multiaddr(bootstrapper2Ma)]
+    },
+  ]
+}
+if (process.env.SEED === '0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2') {
+  gossipsubConfig.directPeers = [
+    {
+      id: peerIdFromString(bootstrapper1PeerId),
+      addrs: [multiaddr(bootstrapper1Ma)]
+    },
+  ]
+}
+
+const libp2pConfig = {
   privateKey: pKey,
   addresses: {
     listen: [`/ip4/0.0.0.0/tcp/${port}/ws`]
@@ -53,38 +117,41 @@ const server = await createLibp2p({
   ],
   connectionEncrypters: [noise()],
   streamMuxers: [yamux()],
-  peerDiscovery: [
-    pubsubPeerDiscovery()
-  ],
+  // peerDiscovery: [
+  //   pubsubPeerDiscovery()
+  // ],
   connectionManager: {
     maxConnections: Infinity
   },
   services: {
     identify: identify(),
-    pubsub: gossipsub({
-      D: 15,
-      Dlo: 10,
-      Dhi: 20,
-      DLazy: 15,
-      doPX: true,
-      emitSelf: false,
-      allowPublishToZeroTopicPeers: true, // don't throw if no peers
-      scoreParams: {
-        IPColocationFactorWeight: 0,
-        // behaviourPenaltyWeight: 0,
-        appSpecificScore: applicationScore
-      },
-      scoreThresholds: {
-        gossipThreshold: -4000,
-        publishThreshold: -8000,
-        graylistThreshold: -16000,
-        acceptPXThreshold: 100,
-        opportunisticGraftThreshold: 5,
-      },
-    }),
     ping: ping(),
+    pubsub: gossipsub(gossipsubConfig),
+    lanDHT: kadDHT({
+      protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
+      clientMode: false,
+      // peerInfoMapper: removePublicAddressesMapper,
+    }),
   }
-})
+}
+
+const server = await createLibp2p(libp2pConfig)
+server.services.lanDHT.setMode("server")
+
+
+// try {
+//   const dht1Conn = await server.dial(multiaddr(dht1Ma))
+//   if (dht1Conn) {
+//     console.log('dialed dht1')
+//   }
+//   const dht2Conn = await server.dial(multiaddr(dht2Ma))
+//   if (dht2Conn) {
+//     console.log('dialed dht2')
+//   }
+// } catch (e) {
+//   console.log('Error dialing dht peerspeer', e)
+// }
+
 
 let lastMessage = ''
 let message = ''
@@ -112,7 +179,7 @@ server.services.pubsub.addEventListener('message', (evt) => {
 
 server.services.pubsub.subscribe(topic)
 
-const type = 'relay'
+const type = 'bootstrapper'
 const peerId = server.peerId.toString()
 
 const getStreams = () => {
@@ -275,20 +342,36 @@ setInterval(async () => {
     lastMessageChanged = true;
   }
 
-  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
-    // Prepare the data to send
-    const updateData = {
-      peerId,
-      subscribers,
-      pubsubPeers,
-      libp2pPeers,
-      meshPeers,
-      connections,
-      streams,
-      topics: server.services.pubsub.getTopics(),
-      type,
-      lastMessage,
-    };
+  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || meshPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
+    const updateData = {}
+
+    if (subscribersChanged) {
+      updateData.subscribers = subscribers
+    }
+
+    if (pubsubPeersChanged) {
+      updateData.pubsubPeers = pubsubPeers
+    }
+
+    if (libp2pPeersChanged) {
+      updateData.libp2pPeers = libp2pPeers
+    }
+
+    if (meshPeersChanged) {
+      updateData.meshPeers = meshPeers
+    }
+
+    if (connectionsChanged) {
+      updateData.connections = connections
+    }
+
+    if (streamsChanged) {
+      updateData.streams = streams
+    }
+
+    if (lastMessageChanged) {
+      updateData.lastMessage = lastMessage
+    }
 
     // Send the data to all connected WebSocket clients
     wss.clients.forEach((ws) => {
@@ -299,7 +382,7 @@ setInterval(async () => {
   }
 }, 100)
 
-console.log('Relay listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
 // const fastify = Fastify({
 //   logger: false
