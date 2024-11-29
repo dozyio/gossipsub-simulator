@@ -2,6 +2,8 @@ FROM node:22-alpine
 
 WORKDIR /app
 
+RUN apk add --no-cache iproute2 iptables
+
 COPY package.json package-lock.json ./
 
 ## copy deps so we can add debugging

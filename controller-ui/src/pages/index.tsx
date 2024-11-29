@@ -29,10 +29,12 @@ interface StreamsByPeer {
 interface ContainerData {
   peerId: string;
   pubsubPeers: string[];
-  libp2pPeers: string[];
   subscribers: string[];
+  libp2pPeers: string[];
   meshPeers: string[];
   connections: string[];
+  protocols: string[];
+  multiaddrs: string[];
   streams: StreamsByPeer;
   topics: string[];
   type: string;
@@ -42,7 +44,7 @@ interface ContainerData {
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'subscribers' | 'connections' | 'streams';
 type ClickType = 'kill' | 'info'
 
-const DEBUG_STRING = 'DEBUG=*'
+const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace'
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
@@ -54,11 +56,12 @@ export default function Home() {
   const [mapType, setMapType] = useState<MapType>('connections');
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
   const [converge, setConverge] = useState<boolean>(false);
-  const [clickType, setClickType] = useState<ClickType>('kill');
+  const [clickType, setClickType] = useState<ClickType>('info');
   const [autoPublish, setAutoPublish] = useState<boolean>(false);
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
+  const [selectedContainer, setSelectedContainer] = useState<string>('');
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -354,6 +357,12 @@ export default function Home() {
     if (clickType === 'kill') {
       stopContainer(containerId)
     } else {
+      if (selectedContainer === containerId) {
+        setSelectedContainer('')
+        return
+      }
+
+      setSelectedContainer(containerId)
       console.log('handleContainerClick', containerId)
       showContainerInfo(containerId)
     }
@@ -529,7 +538,7 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <div className="app-container">
-        <div className="sidebar">
+        <div className="sidebar sidebar1">
           {/* Input box for Docker image name */}
           <div className="input-group">
             <label>
@@ -546,7 +555,6 @@ export default function Home() {
           <p>{`Running containers: ${containers.length}`}</p>
           <p>{`Showing ${mapType}`}</p>
 
-          {/* Buttons */}
           <h3>Start Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
             <button onClick={handleStartBootstrap1}>Bootstrap1</button>
@@ -576,146 +584,6 @@ export default function Home() {
             <button onClick={() => setMapType('pubsubPeers')}>Pubsub Peer Store</button>
             <button onClick={() => setMapType('libp2pPeers')}>Libp2p Peer Store</button>
           </div>
-
-        </div>
-        <div className="container-circle">
-          <svg className="connections">
-            {connections.map((conn, index) => {
-              const fromEl = containerRefs.current[conn.from];
-              const toEl = containerRefs.current[conn.to];
-
-              if (fromEl && toEl) {
-                const fromRect = fromEl.getBoundingClientRect();
-                const toRect = toEl.getBoundingClientRect();
-
-                const svgRect = fromEl.parentElement!.getBoundingClientRect();
-
-                const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
-                const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
-
-                const x2 = toRect.left + toRect.width / 2 - svgRect.left;
-                const y2 = toRect.top + toRect.height / 2 - svgRect.top;
-
-                // Determine the protocol associated with this connection
-                let connectionProtocol: string | null = null;
-
-                if (mapType === 'streams') {
-                  const toPeerId = containerData[conn.to]?.peerId;
-                  const fromStreams = containerData[conn.from]?.streams[toPeerId];
-
-                  if (
-                    toPeerId &&
-                    fromStreams &&
-                    fromStreams.length > 0 &&
-                    typeof fromStreams[0].protocol === 'string' &&
-                    fromStreams[0].protocol.trim() !== ''
-                  ) {
-                    connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
-                  } else {
-                    // Try the reverse: from to to from
-                    const fromPeerId = containerData[conn.from]?.peerId;
-                    const toStreams = containerData[conn.to]?.streams[fromPeerId];
-
-                    if (
-                      fromPeerId &&
-                      toStreams &&
-                      toStreams.length > 0 &&
-                      typeof toStreams[0].protocol === 'string' &&
-                      toStreams[0].protocol.trim() !== ''
-                    ) {
-                      connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
-                    }
-                  }
-                }
-
-                // If protocols are selected, filter connections
-                if (selectedProtocols.length > 0 && mapType === 'streams') {
-                  if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
-                    return null; // Do not render this connection
-                  }
-                }
-
-                // Determine the stroke color based on the protocol
-                let strokeColor = '#ffffff'; // Default color
-
-                if (connectionProtocol) {
-                  // Define a color mapping based on protocol
-                  const protocolColorMap: { [key: string]: string } = {
-                    '/meshsub/1.2.0': '#0fff00',
-                    '/ipfs/id/1.0.0': '#00ff00',
-                    '/ipfs/ping/1.0.0': '#000ff0',
-                    // Add more protocols and their corresponding colors here
-                  };
-                  strokeColor = protocolColorMap[connectionProtocol] || '#000000';
-                } else {
-                  // For connections without a protocol, use default coloring
-                  strokeColor = `#${conn.from.substring(0, 6)}`;
-                }
-                if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
-                  strokeColor = '#ffffff';
-                }
-
-                return (
-                  <line
-                    key={index}
-                    x1={x1}
-                    y1={y1}
-                    x2={x2}
-                    y2={y2}
-                    stroke={strokeColor}
-                    strokeWidth="2"
-                  />
-                );
-              }
-              return null;
-            })}
-          </svg>
-
-          {containers.map((container, index) => {
-            const numContainers = containers.length;
-
-            // Arrange containers in a single circle
-            const angle = (index / numContainers) * 360;
-            const radius = 300; // Fixed radius
-
-            // Adjust item size based on number of containers
-            const minItemSize = 20;
-            const maxItemSize = 80;
-            const itemSize = Math.max(minItemSize, maxItemSize - numContainers);
-
-            const fontSize = itemSize / 4; // Adjust font size proportionally
-
-            return (
-              <div
-                key={container.id}
-                ref={(el) => { containerRefs.current[container.id] = el; }}
-                className="container-item"
-                onClick={() => handleContainerClick(container.id)}
-                onMouseEnter={() => setHoveredContainerId(container.id)}
-                onMouseLeave={() => setHoveredContainerId(null)}
-                style={{
-                  width: `${itemSize}px`,
-                  height: `${itemSize}px`,
-                  lineHeight: `${itemSize}px`,
-                  transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
-                  fontSize: `${fontSize}px`,
-                  backgroundColor: `${converge ? containerData[container.id]?.lastMessage : `#${container.id.substring(0, 6)}`}`,
-                  border: `${containerData[container.id]?.type === 'bootstrapper' ? '3px solid white' : '0px'}`
-                }}
-                title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
-              >
-                {container.image.split(':')[0]}
-              </div>
-            );
-          })}
-        </div>
-        <div className="sidebar">
-          <h1>Gossip Simulator</h1>
-          <button onClick={handleClickType}>Clicks: {clickType}</button>
-          <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
-          <button onClick={() => publishToTopic(1)}>Publish to topic</button>
-          <button onClick={() => publishToTopic(1000)}>Publish 1000 to topic</button>
-          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           {/* Conditionally render protocols when mapType is 'streams' */}
           {mapType === 'streams' && (
             <div className="protocol-list">
@@ -752,6 +620,164 @@ export default function Home() {
               )}
             </div>
           )}
+
+        </div>
+        <div className="middle">
+          <div className="container-circle">
+            <svg className="connections">
+              {connections.map((conn, index) => {
+                const fromEl = containerRefs.current[conn.from];
+                const toEl = containerRefs.current[conn.to];
+
+                if (fromEl && toEl) {
+                  const fromRect = fromEl.getBoundingClientRect();
+                  const toRect = toEl.getBoundingClientRect();
+
+                  const svgRect = fromEl.parentElement!.getBoundingClientRect();
+
+                  const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
+                  const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
+
+                  const x2 = toRect.left + toRect.width / 2 - svgRect.left;
+                  const y2 = toRect.top + toRect.height / 2 - svgRect.top;
+
+                  // Determine the protocol associated with this connection
+                  let connectionProtocol: string | null = null;
+
+                  if (mapType === 'streams') {
+                    const toPeerId = containerData[conn.to]?.peerId;
+                    const fromStreams = containerData[conn.from]?.streams[toPeerId];
+
+                    if (
+                      toPeerId &&
+                      fromStreams &&
+                      fromStreams.length > 0 &&
+                      typeof fromStreams[0].protocol === 'string' &&
+                      fromStreams[0].protocol.trim() !== ''
+                    ) {
+                      connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
+                    } else {
+                      // Try the reverse: from to to from
+                      const fromPeerId = containerData[conn.from]?.peerId;
+                      const toStreams = containerData[conn.to]?.streams[fromPeerId];
+
+                      if (
+                        fromPeerId &&
+                        toStreams &&
+                        toStreams.length > 0 &&
+                        typeof toStreams[0].protocol === 'string' &&
+                        toStreams[0].protocol.trim() !== ''
+                      ) {
+                        connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                      }
+                    }
+                  }
+
+                  // If protocols are selected, filter connections
+                  if (selectedProtocols.length > 0 && mapType === 'streams') {
+                    if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
+                      return null; // Do not render this connection
+                    }
+                  }
+
+                  // Determine the stroke color based on the protocol
+                  let strokeColor = '#ffffff'; // Default color
+
+                  if (connectionProtocol) {
+                    // Define a color mapping based on protocol
+                    const protocolColorMap: { [key: string]: string } = {
+                      '/meshsub/1.2.0': '#0fff00',
+                      '/ipfs/id/1.0.0': '#00ff00',
+                      '/ipfs/ping/1.0.0': '#000ff0',
+                      // Add more protocols and their corresponding colors here
+                    };
+                    strokeColor = protocolColorMap[connectionProtocol] || '#000000';
+                  } else {
+                    // For connections without a protocol, use default coloring
+                    strokeColor = `#${conn.from.substring(0, 6)}`;
+                  }
+                  if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
+                    strokeColor = '#ffffff';
+                  }
+
+                  return (
+                    <line
+                      key={index}
+                      x1={x1}
+                      y1={y1}
+                      x2={x2}
+                      y2={y2}
+                      stroke={strokeColor}
+                      strokeWidth="2"
+                    />
+                  );
+                }
+                return null;
+              })}
+            </svg>
+
+            {containers.map((container, index) => {
+              const numContainers = containers.length;
+
+              // Arrange containers in a single circle
+              const angle = (index / numContainers) * 360;
+              const radius = 300; // Fixed radius
+
+              // Adjust item size based on number of containers
+              const minItemSize = 20;
+              const maxItemSize = 80;
+              const itemSize = Math.max(minItemSize, maxItemSize - numContainers);
+
+              const fontSize = itemSize / 4; // Adjust font size proportionally
+
+              return (
+                <div
+                  key={container.id}
+                  ref={(el) => { containerRefs.current[container.id] = el; }}
+                  className="container-item"
+                  onClick={() => handleContainerClick(container.id)}
+                  onMouseEnter={() => setHoveredContainerId(container.id)}
+                  onMouseLeave={() => setHoveredContainerId(null)}
+                  style={{
+                    width: `${itemSize}px`,
+                    height: `${itemSize}px`,
+                    lineHeight: `${itemSize}px`,
+                    transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
+                    fontSize: `${fontSize}px`,
+                    backgroundColor: `${converge ? containerData[container.id]?.lastMessage : `#${container.id.substring(0, 6)}`}`,
+                    border: `${containerData[container.id]?.type === 'bootstrapper' ? '3px solid white' : '0px'}`
+                  }}
+                  title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
+                >
+                  {container.image.split(':')[0]}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="sidebar sidebar2">
+          <h1>Gossip Simulator</h1>
+          <button onClick={handleClickType}>Clicks: {clickType}</button>
+          <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
+          <button onClick={() => publishToTopic(1)}>Publish to topic</button>
+          <button onClick={() => publishToTopic(1000)}>Publish 1000 to topic</button>
+          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
+          {selectedContainer && (
+            <div>
+              <h3>Info</h3>
+              <button onClick={() => stopContainer(selectedContainer)}>Kill</button>
+              <div>Container ID: {selectedContainer}</div>
+              <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
+              <div>Outbound Connections: {connections.filter(conn => conn.from === selectedContainer).length}</div>
+              <div>Inbound Connections: {connections.filter(conn => conn.to === selectedContainer).length}</div>
+              <div>Mesh Peers: {containerData[selectedContainer]?.meshPeers?.length}</div>
+              <div>Subscribers: {containerData[selectedContainer]?.subscribers?.length}</div>
+              <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
+              <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
+              <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index}>{p}</p>)}</div>
+              <div>Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}</div>
+            </div>
+          )}
         </div>
         <style jsx>{`
         .app-container {
@@ -786,7 +812,11 @@ export default function Home() {
           font-size: 16px;
         }
 
-        .sidebar p {
+        p {
+          word-wrap: break-word;
+        }
+
+        .sidebar1 p {
           font-size: 18px;
           margin-bottom: 20px;
           text-align: center;
@@ -800,9 +830,12 @@ export default function Home() {
           cursor: pointer;
         }
 
+        .middle {
+          flex-grow: 1;
+        }
+
         .container-circle {
           position: relative;
-          flex-grow: 1;
           width: 800px;
           height: 800px;
           margin: 0 auto;

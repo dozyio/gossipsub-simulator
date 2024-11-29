@@ -257,6 +257,7 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int,
 	hostConfig := &container.HostConfig{
 		PortBindings: portBindings,
 		NetworkMode:  container.NetworkMode(networkName),
+		Privileged:   true,
 	}
 
 	// Create the container with labels

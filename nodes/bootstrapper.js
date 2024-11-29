@@ -7,6 +7,7 @@ import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 import { identify } from '@libp2p/identify'
 import { webSockets } from '@libp2p/websockets'
+import { tcp } from '@libp2p/tcp'
 import { keys } from '@libp2p/crypto'
 import * as filters from '@libp2p/websockets/filters'
 import { createLibp2p } from 'libp2p'
@@ -17,6 +18,9 @@ import { fromString, toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
 import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
 import { peerIdFromString } from '@libp2p/peer-id'
+import { isPrivateIp } from '@libp2p/utils/private-ip'
+// import pRetry from 'p-retry'
+// import delay from 'delay'
 
 let seed = '0x1111111111111111111111111111111111111111111111111111111111111111'
 if (process.env.SEED !== undefined) {
@@ -40,11 +44,11 @@ if (process.env.DHTPREFIX !== undefined) {
 
 //'0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
 const bootstrapper1PeerId = '12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF'
-const bootstrapper1Ma = `/dns/bootstrapper1/tcp/42069/ws/p2p/${bootstrapper1PeerId}`
+const bootstrapper1Ma = `/dns/bootstrapper1/tcp/42069/p2p/${bootstrapper1PeerId}`
 
 //'0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
 const bootstrapper2PeerId = '12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw'
-const bootstrapper2Ma = `/dns/bootstrapper2/tcp/42069/ws/p2p/${bootstrapper2PeerId}`
+const bootstrapper2Ma = `/dns/bootstrapper2/tcp/42069/p2p/${bootstrapper2PeerId}`
 
 function applicationScore(p) {
   if (p === bootstrapper1PeerId || p === bootstrapper2PeerId) {
@@ -75,7 +79,8 @@ const gossipsubConfig = {
     acceptPXThreshold: 100,
     opportunisticGraftThreshold: 5,
   },
-  directConnectTicks: 10,
+  directConnectTicks: 30,
+  directConnectInitialDelay: 500,
   // directPeers: [
   //   {
   //     id: peerIdFromString(bootstrapper1PeerId),
@@ -105,15 +110,59 @@ if (process.env.SEED === '0xdddddddddddddddddddddddddddddddddddddddddddddddddddd
   ]
 }
 
+const removePublicAddressesLoopbackAddressesMapper = (peer) => {
+  const newMultiaddrs = peer.multiaddrs.filter(multiaddr => {
+    const [[type, addr]] = multiaddr.stringTuples()
+
+    // console.log('removePublicAddressesLoopbackAddressesMapper', type, addr)
+
+    if (addr === 'localhost') {
+      return false
+    }
+
+    if (addr === '127.0.0.1') {
+      return false
+    }
+
+    if (type !== 4 && type !== 6) {
+      return false
+    }
+
+    if (addr == null) {
+      return false
+    }
+
+    const isPrivate = isPrivateIp(addr)
+
+    if (isPrivate == null) {
+      // not an ip address
+      return false
+    }
+
+    return isPrivate
+  })
+
+  // console.log('newMultiaddrs', newMultiaddrs)
+
+  return {
+    ...peer,
+    multiAddrs: newMultiaddrs
+  }
+}
+
 const libp2pConfig = {
   privateKey: pKey,
   addresses: {
-    listen: [`/ip4/0.0.0.0/tcp/${port}/ws`]
+    listen: [
+      // `/ip4/0.0.0.0/tcp/${port}/ws`,
+      `/ip4/0.0.0.0/tcp/${port}`,
+    ]
   },
   transports: [
     webSockets({
       filter: filters.all
-    })
+    }),
+    tcp()
   ],
   connectionEncrypters: [noise()],
   streamMuxers: [yamux()],
@@ -130,27 +179,13 @@ const libp2pConfig = {
     lanDHT: kadDHT({
       protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
       clientMode: false,
-      // peerInfoMapper: removePublicAddressesMapper,
+      peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
     }),
   }
 }
 
 const server = await createLibp2p(libp2pConfig)
-server.services.lanDHT.setMode("server")
-
-
-// try {
-//   const dht1Conn = await server.dial(multiaddr(dht1Ma))
-//   if (dht1Conn) {
-//     console.log('dialed dht1')
-//   }
-//   const dht2Conn = await server.dial(multiaddr(dht2Ma))
-//   if (dht2Conn) {
-//     console.log('dialed dht2')
-//   }
-// } catch (e) {
-//   console.log('Error dialing dht peerspeer', e)
-// }
+await server.services.lanDHT.setMode("server")
 
 
 let lastMessage = ''
@@ -176,6 +211,7 @@ server.services.pubsub.addEventListener('message', (evt) => {
 
   message = toString(evt.detail.data)
 })
+
 
 server.services.pubsub.subscribe(topic)
 
@@ -212,15 +248,18 @@ const getStreams = () => {
 let topics = server.services.pubsub.getTopics()
 let subscriberList = server.services.pubsub.getSubscribers(topic)
 let pubsubPeerList = server.services.pubsub.getPeers()
-let libp2pPeerList = await server.peerStore.all()
 let meshPeerList = server.services.pubsub.getMeshPeers(topic)
+let libp2pPeerList = await server.peerStore.all()
 let connectionList = server.getConnections()
+let protocols = server.getProtocols()
+let multiaddrList = server.getMultiaddrs()
 
 let subscribers = subscriberList.map((peerId) => peerId.toString())
 let pubsubPeers = pubsubPeerList.map((peerId) => peerId.toString())
-let libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
 let meshPeers = meshPeerList.map((peer) => peer.toString())
+let libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
 let connections = connectionList.map((connection) => connection.remotePeer.toString())
+let multiaddrs = multiaddrList.map((ma) => ma.toString())
 let streams = getStreams()
 
 let isAlive = true
@@ -238,12 +277,12 @@ wss.on('connection', function connection(ws) {
 
     switch (newMessage.type) {
       case 'info':
-        console.log(server.services.pubsub.dumpPeerScoreStats())
+        // console.log(server.services.pubsub.dumpPeerScoreStats())
         break;
       case 'publish':
         message = newMessage.message
         try {
-          server.services.pubsub.publish(topic, fromString(message))
+          // server.services.pubsub.publish(topic, fromString(message))
         } catch (e) {
           console.log(e)
         }
@@ -258,9 +297,12 @@ wss.on('connection', function connection(ws) {
     peerId,
     subscribers,
     pubsubPeers,
+    meshPeers,
     libp2pPeers,
     connections,
+    protocols,
     streams,
+    multiaddrs,
     topics,
     type,
     lastMessage,
@@ -336,13 +378,30 @@ setInterval(async () => {
     streamsChanged = true;
   }
 
+  let protocolsChanged = false;
+  const newProtocols = server.getProtocols()
+
+  if (!isEqual(protocols, newProtocols)) {
+    protocols = newProtocols
+    protocolsChanged = true;
+  }
+
+  let multiaddrsChanged = false;
+  const newMultiaddrList = server.getMultiaddrs()
+  const newMultiaddrs = newMultiaddrList.map((ma) => ma.toString())
+
+  if (!isEqual(multiaddrs, newMultiaddrs)) {
+    multiaddrs = newMultiaddrs
+    multiaddrsChanged = true;
+  }
+
   let lastMessageChanged = false;
   if (lastMessage !== message) {
     lastMessage = message
     lastMessageChanged = true;
   }
 
-  if (subscribersChanged || pubsubPeersChanged || libp2pPeersChanged || meshPeersChanged || connectionsChanged || streamsChanged || lastMessageChanged) {
+  if (subscribersChanged || pubsubPeersChanged || meshPeersChanged || libp2pPeersChanged || connectionsChanged || protocolsChanged || streamsChanged || lastMessageChanged || multiaddrsChanged) {
     const updateData = {}
 
     if (subscribersChanged) {
@@ -353,20 +412,28 @@ setInterval(async () => {
       updateData.pubsubPeers = pubsubPeers
     }
 
-    if (libp2pPeersChanged) {
-      updateData.libp2pPeers = libp2pPeers
-    }
-
     if (meshPeersChanged) {
       updateData.meshPeers = meshPeers
+    }
+
+    if (libp2pPeersChanged) {
+      updateData.libp2pPeers = libp2pPeers
     }
 
     if (connectionsChanged) {
       updateData.connections = connections
     }
 
+    if (protocolsChanged) {
+      updateData.protocols = protocols
+    }
+
     if (streamsChanged) {
       updateData.streams = streams
+    }
+
+    if (multiaddrsChanged) {
+      updateData.mulitaddrs = multiaddrs
     }
 
     if (lastMessageChanged) {
@@ -383,6 +450,61 @@ setInterval(async () => {
 }, 100)
 
 console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+
+
+// async function checkConnected(peerId) {
+//   const routingTableChecks = []
+//
+//   if (server.services.lanDHT.getMode() === 'server') {
+//     routingTableChecks.push(async () => {
+//       console.log('dht checking routing table')
+//       const match = await server.services.lanDHT.routingTable.find(peerId)
+//
+//       if (match == null) {
+//         await delay(100)
+//         throw new Error('not found')
+//       }
+//
+//       return match
+//     })
+//   } else {
+//     console.log('DHT not in server mode')
+//     throw new Error('DHT not in server mode')
+//   }
+//
+//   // Check routing tables
+//   return Promise.all(
+//     routingTableChecks
+//       .map(
+//         async check => pRetry(check, { retries: 50 })
+//       )
+//   )
+// }
+
+// bootstrapper 2
+// if (server.peerId.toString() === '12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw') {
+//   console.log('dialing bootstrapper 1')
+//   try {
+//     await server.dial(multiaddr(bootstrapper1Ma))
+//
+//     // const res = await checkConnected(peerIdFromString(bootstrapper1PeerId))
+//     // if (res.length === 1) {
+//     //   console.log('dht connected', res)
+//     // } else {
+//     //   console.log('dht not connected')
+//     //   process.exit(1)
+//     // }
+//
+//   } catch (e) {
+//     console.log('Error dialing bootstrapper 1', e)
+//   }
+// }
+
+// setInterval(() => {
+//   console.log('kb', server.services.lanDHT.routingTable.kb.count())
+//   const allPeers = [...server.services.lanDHT.routingTable.kb.toIterable()];
+//   console.log('kb peers', allPeers.map((peer) => peer.peerId.toString()))
+// }, 3000)
 
 // const fastify = Fastify({
 //   logger: false
