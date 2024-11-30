@@ -12,7 +12,7 @@ import { createLibp2p } from 'libp2p'
 import { fromString, toString } from 'uint8arrays'
 import { bootstrap } from '@libp2p/bootstrap'
 import { pubsubPeerDiscovery } from '@libp2p/pubsub-peer-discovery'
-import { isEqual, stringToDialable } from './helpers.js'
+import { isEqual, stringToDialable, getStreams } from './helpers.js'
 import { multiaddr } from '@multiformats/multiaddr'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
@@ -88,13 +88,13 @@ const server = await createLibp2p({
     }),
     lanDHT: kadDHT({
       protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
-      clientMode: false,
+      clientMode: true,
       peerInfoMapper: removePublicAddressesMapper,
     }),
   }
 })
 
-await server.services.lanDHT.setMode("server")
+// await server.services.lanDHT.setMode("server")
 
 console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
@@ -120,32 +120,6 @@ let isAlive = true
 const type = 'gossip'
 const peerId = server.peerId.toString()
 
-const getStreams = () => {
-  const connections = server.getConnections();
-
-  return connections.reduce((accumulator, connection) => {
-    // Ensure the connection has streams and a valid remotePeer
-    if (connection.streams && connection.streams.length > 0 && connection.remotePeer) {
-      const peerId = connection.remotePeer.toString();
-
-      // Initialize the array for this peerId if it doesn't exist
-      if (!accumulator[peerId]) {
-        accumulator[peerId] = [];
-      }
-
-      // Map the streams to the desired format and append them to the peer's array
-      const mappedStreams = connection.streams.map(stream => ({
-        protocol: stream.protocol,
-        direction: stream.direction
-      }));
-
-      accumulator[peerId].push(...mappedStreams);
-    }
-
-    return accumulator;
-  }, {}); // Initialize accumulator as an empty object
-};
-
 // initial state
 let topics = server.services.pubsub.getTopics()
 let subscriberList = server.services.pubsub.getSubscribers(topic)
@@ -155,6 +129,7 @@ let libp2pPeerList = await server.peerStore.all()
 let connectionList = server.getConnections()
 let protocols = server.getProtocols()
 let multiaddrList = server.getMultiaddrs()
+let dhtPeerList = [...server.services.lanDHT.routingTable.kb.toIterable()];
 
 let subscribers = subscriberList.map((peerId) => peerId.toString())
 let pubsubPeers = pubsubPeerList.map((peerId) => peerId.toString())
@@ -162,7 +137,8 @@ let meshPeers = meshPeerList.map((peer) => peer.toString())
 let libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
 let connections = connectionList.map((connection) => connection.remotePeer.toString())
 let multiaddrs = multiaddrList.map((ma) => ma.toString())
-let streams = getStreams()
+let dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
+let streams = getStreams(server)
 
 const heartbeat = () => {
   isAlive = true;
@@ -206,6 +182,7 @@ wss.on('connection', function connection(ws) {
     streams,
     multiaddrs,
     topics,
+    dhtPeers,
     type,
     lastMessage,
   };
@@ -273,7 +250,7 @@ setInterval(async () => {
   }
 
   let streamsChanged = false;
-  const newStreams = getStreams()
+  const newStreams = getStreams(server)
 
   if (!isEqual(streams, newStreams)) {
     streams = newStreams
@@ -281,7 +258,7 @@ setInterval(async () => {
   }
 
   let protocolsChanged = false;
-  const newProtocols  = server.getProtocols()
+  const newProtocols = server.getProtocols()
 
   if (!isEqual(protocols, newProtocols)) {
     protocols = newProtocols
@@ -297,13 +274,22 @@ setInterval(async () => {
     multiaddrsChanged = true;
   }
 
+  let dhtPeersChanged = false;
+  const newDhtPeerList = [...server.services.lanDHT.routingTable.kb.toIterable()]
+  const newDhtPeers = newDhtPeerList.map((peer) => peer.peerId.toString())
+
+  if (!isEqual(dhtPeers, newDhtPeers)) {
+    dhtPeers = newDhtPeers
+    dhtPeersChanged = true;
+  }
+
   let lastMessageChanged = false;
   if (lastMessage !== message) {
     lastMessage = message
     lastMessageChanged = true;
   }
-  
-  if (subscribersChanged || pubsubPeersChanged || meshPeersChanged || libp2pPeersChanged || connectionsChanged || protocolsChanged || streamsChanged || lastMessageChanged || multiaddrsChanged) {
+
+  if (subscribersChanged || pubsubPeersChanged || meshPeersChanged || libp2pPeersChanged || connectionsChanged || protocolsChanged || streamsChanged || lastMessageChanged || multiaddrsChanged || dhtPeersChanged) {
     const updateData = {}
 
     if (subscribersChanged) {
@@ -314,12 +300,12 @@ setInterval(async () => {
       updateData.pubsubPeers = pubsubPeers
     }
 
-    if (libp2pPeersChanged) {
-      updateData.libp2pPeers = libp2pPeers
-    }
-
     if (meshPeersChanged) {
       updateData.meshPeers = meshPeers
+    }
+
+    if (libp2pPeersChanged) {
+      updateData.libp2pPeers = libp2pPeers
     }
 
     if (connectionsChanged) {
@@ -338,6 +324,10 @@ setInterval(async () => {
       updateData.mulitaddrs = multiaddrs
     }
 
+    if (dhtPeersChanged) {
+      updateData.dhtPeers = dhtPeers
+    }
+
     if (lastMessageChanged) {
       updateData.lastMessage = lastMessage
     }
@@ -349,8 +339,8 @@ setInterval(async () => {
       }
     });
   }
-
 }, 100)
+
 
 try {
   await server.dial(multiaddr(bootstrapper1Ma))
@@ -363,7 +353,7 @@ try {
   console.log('Error dialing bootstrapper2 peer', e)
 }
 
-// connect to bootstrapper 1
+// reconnect to bootstrapper 1 - refresh peers
 setInterval(async () => {
   let hasBootstrapperConn = false
 
@@ -386,7 +376,7 @@ setInterval(async () => {
   }
 }, 20_000)
 
-// connect to bootstrapper 2
+// reconnect to bootstrapper 2 - refresh peers
 setInterval(async () => {
   let hasBootstrapperConn = false
 

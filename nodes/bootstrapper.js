@@ -12,7 +12,7 @@ import { keys } from '@libp2p/crypto'
 import * as filters from '@libp2p/websockets/filters'
 import { createLibp2p } from 'libp2p'
 import { pubsubPeerDiscovery } from '@libp2p/pubsub-peer-discovery'
-import { isEqual, hexStringToUint8Array } from './helpers.js'
+import { isEqual, hexStringToUint8Array, getStreams } from './helpers.js'
 import { ping } from '@libp2p/ping'
 import { fromString, toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
@@ -114,8 +114,6 @@ const removePublicAddressesLoopbackAddressesMapper = (peer) => {
   const newMultiaddrs = peer.multiaddrs.filter(multiaddr => {
     const [[type, addr]] = multiaddr.stringTuples()
 
-    // console.log('removePublicAddressesLoopbackAddressesMapper', type, addr)
-
     if (addr === 'localhost') {
       return false
     }
@@ -180,6 +178,11 @@ const libp2pConfig = {
       protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
       clientMode: false,
       peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
+      allowQueryWithZeroPeers: true,
+      // initialQuerySelfInterval: 0,
+      networkDialTimeout: {
+        minTimeout: 10_000,
+      }
     }),
   }
 }
@@ -218,32 +221,6 @@ server.services.pubsub.subscribe(topic)
 const type = 'bootstrapper'
 const peerId = server.peerId.toString()
 
-const getStreams = () => {
-  const connections = server.getConnections();
-
-  return connections.reduce((accumulator, connection) => {
-    // Ensure the connection has streams and a valid remotePeer
-    if (connection.streams && connection.streams.length > 0 && connection.remotePeer) {
-      const peerId = connection.remotePeer.toString();
-
-      // Initialize the array for this peerId if it doesn't exist
-      if (!accumulator[peerId]) {
-        accumulator[peerId] = [];
-      }
-
-      // Map the streams to the desired format and append them to the peer's array
-      const mappedStreams = connection.streams.map(stream => ({
-        protocol: stream.protocol,
-        direction: stream.direction
-      }));
-
-      accumulator[peerId].push(...mappedStreams);
-    }
-
-    return accumulator;
-  }, {}); // Initialize accumulator as an empty object
-};
-
 // initial state
 let topics = server.services.pubsub.getTopics()
 let subscriberList = server.services.pubsub.getSubscribers(topic)
@@ -253,6 +230,7 @@ let libp2pPeerList = await server.peerStore.all()
 let connectionList = server.getConnections()
 let protocols = server.getProtocols()
 let multiaddrList = server.getMultiaddrs()
+let dhtPeerList = [...server.services.lanDHT.routingTable.kb.toIterable()];
 
 let subscribers = subscriberList.map((peerId) => peerId.toString())
 let pubsubPeers = pubsubPeerList.map((peerId) => peerId.toString())
@@ -260,7 +238,8 @@ let meshPeers = meshPeerList.map((peer) => peer.toString())
 let libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
 let connections = connectionList.map((connection) => connection.remotePeer.toString())
 let multiaddrs = multiaddrList.map((ma) => ma.toString())
-let streams = getStreams()
+let dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
+let streams = getStreams(server)
 
 let isAlive = true
 const heartbeat = () => {
@@ -277,7 +256,8 @@ wss.on('connection', function connection(ws) {
 
     switch (newMessage.type) {
       case 'info':
-        // console.log(server.services.pubsub.dumpPeerScoreStats())
+        server.services.pubsub.score.refreshScores()
+        console.log(server.services.pubsub.dumpPeerScoreStats())
         break;
       case 'publish':
         message = newMessage.message
@@ -304,6 +284,7 @@ wss.on('connection', function connection(ws) {
     streams,
     multiaddrs,
     topics,
+    dhtPeers,
     type,
     lastMessage,
   };
@@ -371,7 +352,7 @@ setInterval(async () => {
   }
 
   let streamsChanged = false;
-  const newStreams = getStreams()
+  const newStreams = getStreams(server)
 
   if (!isEqual(streams, newStreams)) {
     streams = newStreams
@@ -395,13 +376,22 @@ setInterval(async () => {
     multiaddrsChanged = true;
   }
 
+  let dhtPeersChanged = false;
+  const newDhtPeerList = [...server.services.lanDHT.routingTable.kb.toIterable()]
+  const newDhtPeers = newDhtPeerList.map((peer) => peer.peerId.toString())
+
+  if (!isEqual(dhtPeers, newDhtPeers)) {
+    dhtPeers = newDhtPeers
+    dhtPeersChanged = true;
+  }
+
   let lastMessageChanged = false;
   if (lastMessage !== message) {
     lastMessage = message
     lastMessageChanged = true;
   }
 
-  if (subscribersChanged || pubsubPeersChanged || meshPeersChanged || libp2pPeersChanged || connectionsChanged || protocolsChanged || streamsChanged || lastMessageChanged || multiaddrsChanged) {
+  if (subscribersChanged || pubsubPeersChanged || meshPeersChanged || libp2pPeersChanged || connectionsChanged || protocolsChanged || streamsChanged || lastMessageChanged || multiaddrsChanged || dhtPeersChanged) {
     const updateData = {}
 
     if (subscribersChanged) {
@@ -436,6 +426,10 @@ setInterval(async () => {
       updateData.mulitaddrs = multiaddrs
     }
 
+    if (dhtPeersChanged) {
+      updateData.dhtPeers = dhtPeers
+    }
+
     if (lastMessageChanged) {
       updateData.lastMessage = lastMessage
     }
@@ -451,60 +445,6 @@ setInterval(async () => {
 
 console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
-
-// async function checkConnected(peerId) {
-//   const routingTableChecks = []
-//
-//   if (server.services.lanDHT.getMode() === 'server') {
-//     routingTableChecks.push(async () => {
-//       console.log('dht checking routing table')
-//       const match = await server.services.lanDHT.routingTable.find(peerId)
-//
-//       if (match == null) {
-//         await delay(100)
-//         throw new Error('not found')
-//       }
-//
-//       return match
-//     })
-//   } else {
-//     console.log('DHT not in server mode')
-//     throw new Error('DHT not in server mode')
-//   }
-//
-//   // Check routing tables
-//   return Promise.all(
-//     routingTableChecks
-//       .map(
-//         async check => pRetry(check, { retries: 50 })
-//       )
-//   )
-// }
-
-// bootstrapper 2
-// if (server.peerId.toString() === '12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw') {
-//   console.log('dialing bootstrapper 1')
-//   try {
-//     await server.dial(multiaddr(bootstrapper1Ma))
-//
-//     // const res = await checkConnected(peerIdFromString(bootstrapper1PeerId))
-//     // if (res.length === 1) {
-//     //   console.log('dht connected', res)
-//     // } else {
-//     //   console.log('dht not connected')
-//     //   process.exit(1)
-//     // }
-//
-//   } catch (e) {
-//     console.log('Error dialing bootstrapper 1', e)
-//   }
-// }
-
-// setInterval(() => {
-//   console.log('kb', server.services.lanDHT.routingTable.kb.count())
-//   const allPeers = [...server.services.lanDHT.routingTable.kb.toIterable()];
-//   console.log('kb peers', allPeers.map((peer) => peer.peerId.toString()))
-// }, 3000)
 
 // const fastify = Fastify({
 //   logger: false

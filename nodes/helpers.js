@@ -64,3 +64,32 @@ export const hexStringToUint8Array = (hexString) => {
 
   return byteArray
 }
+
+export const getStreams = (server) => {
+  const connections = server.getConnections();
+
+  return connections.reduce((accumulator, connection) => {
+    // Ensure the connection has streams and a valid remotePeer
+    if (connection.streams && connection.streams.length > 0 && connection.remotePeer) {
+      const peerId = connection.remotePeer.toString();
+
+      // Initialize the array for this peerId if it doesn't exist
+      if (!accumulator[peerId]) {
+        accumulator[peerId] = [];
+      }
+
+      // Map the streams to the desired format and append them to the peer's array
+      const mappedStreams = connection.streams.map(stream => ({
+        protocol: stream.protocol,
+        direction: stream.direction
+      }));
+
+      accumulator[peerId].push(...mappedStreams);
+    }
+
+    return accumulator;
+  }, {}); // Initialize accumulator as an empty object
+};
+
+export const newStatusServer = (server) => {
+}
