@@ -726,7 +726,7 @@ export default function Home() {
 
               // Arrange containers in a single circle
               const angle = (index / numContainers) * 360;
-              const radius = 300; // Fixed radius
+              const radius = 320; // Fixed radius
 
               // Adjust item size based on number of containers
               const minItemSize = 20;
