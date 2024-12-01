@@ -510,7 +510,8 @@ export default function Home() {
         // Find the public port that maps to container's port 80
         const portMapping = container.ports.find(
           (port) => port.private_port === 80 && port.type === 'tcp'
-        );
+        )
+
         if (portMapping && portMapping.public_port) {
           const wsUrl = `ws://localhost:${portMapping.public_port}/`;
           const ws = new WebSocket(wsUrl);
@@ -522,6 +523,7 @@ export default function Home() {
           ws.onmessage = (event) => {
             try {
               const data: ContainerData = JSON.parse(event.data);
+              console.log('Received WebSocket message:', data);
               handleWebSocketMessage(container.id, data);
             } catch (error) {
               console.error(
@@ -553,6 +555,7 @@ export default function Home() {
         // Container no longer exists, close the WebSocket
         const ws = containerSockets.current[containerId];
         if (ws) {
+          console.log('Closing WebSocket for container', containerId);
           ws.close();
         }
         containerSockets.current[containerId] = null;
