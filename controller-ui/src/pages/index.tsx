@@ -1,4 +1,6 @@
 import Head from "next/head";
+import { FaCircleNodes } from "react-icons/fa6";
+import { FaRegCircle } from "react-icons/fa";
 import { useEffect, useRef, useState } from 'react';
 
 interface PortMapping {
@@ -26,34 +28,67 @@ interface StreamsByPeer {
   [peerId: string]: Stream[];
 }
 
-interface PeerScores{
+interface PeerScores {
   [peerId: string]: number;
 }
 
 interface ContainerData {
+  id: string; // Unique identifier
   peerId: string;
   pubsubPeers: string[];
   subscribers: string[];
   libp2pPeers: string[];
   meshPeers: string[];
   dhtPeers: string[];
-  connections: string[];
+  connections: string[]; // IDs of connected containers
   protocols: string[];
   multiaddrs: string[];
   streams: StreamsByPeer;
   topics: string[];
   type: string;
   lastMessage: string;
-  peerScore: PeerScores;
+  peerScores: PeerScores;
+  x: number; // Position X
+  y: number; // Position Y
+  vx: number; // Velocity X
+  vy: number; // Velocity Y
 }
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
-type ClickType = 'kill' | 'info'
 
-const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace'
+type ClickType = 'kill' | 'info';
 
-const LATENCY_MIN = 5
-const LATENCY_MAX = 250
+type MapView = 'circle' | 'graph';
+
+const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
+
+// Latency settings
+const LATENCY_MIN = 5;
+const LATENCY_MAX = 250;
+
+
+// Constants for force calculations
+const NODE_SIZE = 30; // Fixed node size
+const MIN_DISTANCE = NODE_SIZE; // Minimum distance between nodes
+
+// Container dimensions
+const CONTAINER_WIDTH = 800;
+const CONTAINER_HEIGHT = 800;
+
+// Force strengths
+const REPULSION_FORCE = 1_000_000; // Adjusted for CSE
+const ATTRACTION_FORCE = 0.25; // Adjusted for CSE
+const COLLISION_FORCE = 500; // Adjusted for CSE
+const GRAVITY_FORCE = 0.75; // Central gravity strength
+const DAMPING = 0.15; // Velocity damping factor
+const MAX_VELOCITY = 5; // Maximum velocity cap
+const NATURAL_LENGTH = 125; // Natural length for springs (ideal distance between connected nodes)
+
+// Utility function to generate random positions within the container
+const getRandomPosition = () => ({
+  x: Math.random() * (CONTAINER_WIDTH - NODE_SIZE) + NODE_SIZE / 2,
+  y: Math.random() * (CONTAINER_HEIGHT - NODE_SIZE) + NODE_SIZE / 2,
+});
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
@@ -72,6 +107,7 @@ export default function Home() {
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
   const [latencyContainer, setLatencyContainer] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
+  const [mapView, setMapView] = useState<MapView>('graph');
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -82,25 +118,55 @@ export default function Home() {
       }
       const data: ContainerInfo[] = await response.json();
       const runningContainers = data.filter((c) => c.state === 'running');
-      setContainers(runningContainers)
+      setContainers(runningContainers);
 
-      const runningContainerIds = new Set(runningContainers.map((c) => c.id));
-      setContainerData((prevData) => {
-        const newData = { ...prevData };
-        Object.keys(newData).forEach((id) => {
-          if (!runningContainerIds.has(id)) {
-            delete newData[id];
-          }
-        });
-        return newData;
-      });
-
+      // Initialize container data with positions and velocities
+      initializeContainerData(runningContainers);
     } catch (error) {
       console.error('Error fetching containers:', error);
-      setContainers([])
-      setContainerData({})
-      setConnections([])
+      setContainers([]);
+      setContainerData({});
+      setConnections([]);
     }
+  };
+
+  const initializeContainerData = (runningContainers: ContainerInfo[]) => {
+    setContainerData((prevData) => {
+      const newData: { [id: string]: ContainerData } = {};
+
+      runningContainers.forEach((container) => {
+        if (prevData[container.id]) {
+          // Retain existing data for running containers
+          newData[container.id] = prevData[container.id];
+        } else {
+          // Initialize data for new containers
+          const { x, y } = getRandomPosition();
+          newData[container.id] = {
+            id: container.id,
+            peerId: '',
+            pubsubPeers: [],
+            subscribers: [],
+            libp2pPeers: [],
+            meshPeers: [],
+            dhtPeers: [],
+            connections: [], // Will be updated via WebSocket
+            protocols: [],
+            multiaddrs: [],
+            streams: {},
+            topics: [],
+            type: '',
+            lastMessage: '',
+            peerScores: {},
+            x,
+            y,
+            vx: 0,
+            vy: 0,
+          };
+        }
+      });
+
+      return newData;
+    });
   };
 
   const startContainer = async (image: string, env: string[], hostname: string = ""): Promise<ContainerInfo | void> => {
@@ -124,75 +190,75 @@ export default function Home() {
       }
 
       const data = await response.json();
-      console.log('Bootstrap Container started:', data);
+      console.log('Container started:', data);
       await fetchContainers(); // Refresh the container list
-      return data
+      return data;
     } catch (error) {
       console.error('Error starting container:', error);
     }
-  }
+  };
 
-  // Function to start a bootstrapper container
   const handleStartBootstrap1 = async () => {
     // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
     const env = [
       'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
-    ]
+    ];
 
     if (debugContainer) {
-      env.push(DEBUG_STRING)
+      env.push(DEBUG_STRING);
     }
 
     if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
     }
 
-    await startContainer('bootstrapper:dev', env, "bootstrapper1")
+    await startContainer('bootstrapper:dev', env, "bootstrapper1");
   };
+
   const handleStartBootstrap2 = async () => {
     // 12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw
     const env = [
       'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
-    ]
+    ];
 
     if (debugContainer) {
-      env.push(DEBUG_STRING)
+      env.push(DEBUG_STRING);
     }
 
     if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
     }
 
-    await startContainer('bootstrapper:dev', env, "bootstrapper2")
+    await startContainer('bootstrapper:dev', env, "bootstrapper2");
   };
 
   // Function to start a new container
   const handleStartContainer = async () => {
-    const env = []
+    const env = [];
 
     if (debugContainer) {
-      env.push(DEBUG_STRING)
+      env.push(DEBUG_STRING);
     }
 
     if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
     }
 
-    await startContainer(imageName, env)
+    await startContainer(imageName, env);
   };
 
   const handleStartXContainers = async (amount = 12) => {
-    const env = []
+    const env = [];
 
     if (debugContainer) {
-      env.push(DEBUG_STRING)
+      env.push(DEBUG_STRING);
     }
 
     try {
       const promises = [];
       for (let i = 0; i < amount; i++) {
         if (latencyContainer) {
-          env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+          env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
         }
 
         promises.push(
@@ -250,7 +316,7 @@ export default function Home() {
   };
 
   const stopXContainers = async (amount = 5) => {
-    // only stop gossip containers
+    // Only stop gossip containers
     const gossipContainers = containers.filter((c) => c.image.includes('gossip'));
     const shuffled = gossipContainers.slice();
 
@@ -266,7 +332,7 @@ export default function Home() {
 
     for (const container of toStop) {
       try {
-        if (containerData[container.id].type === 'bootstrapper') {
+        if (containerData[container.id]?.type === 'bootstrapper') {
           continue;
         }
 
@@ -282,14 +348,15 @@ export default function Home() {
 
         if (!response.ok) {
           const errorText = await response.text();
-          throw new Error(`Error stopping all containers: ${errorText}`);
+          throw new Error(`Error stopping container: ${errorText}`);
         }
 
-        // fetchContainers(); // Refresh the container list
       } catch (error) {
-        console.error('Error stopping all containers:', error);
+        console.error('Error stopping container:', error);
       }
     }
+
+    await fetchContainers();
   };
 
   const getRandomColor = () => {
@@ -299,10 +366,10 @@ export default function Home() {
       color += letters[Math.floor(Math.random() * 16)];
     }
     return color;
-  }
+  };
 
   const publishToTopic = async (amount = 1000) => {
-    setConverge(true)
+    setConverge(true);
 
     try {
       // Extract all WebSocket instances, filtering out nulls
@@ -316,18 +383,16 @@ export default function Home() {
       }
 
       for (let i = 0; i < amount; i++) {
-        // Generate a random index
         const randomIndex = Math.floor(Math.random() * sockets.length);
 
-        // Return the randomly selected WebSocket
-        const s = sockets[randomIndex]
+        const s = sockets[randomIndex];
 
         const message = {
           type: 'publish',
           message: getRandomColor()
-        }
+        };
 
-        s.send(JSON.stringify(message))
+        s.send(JSON.stringify(message));
       }
     } catch (error) {
       console.error('Error publishing to topic:', error);
@@ -335,21 +400,21 @@ export default function Home() {
   };
 
   const publishToPeer = async (containerId: string, amount = 1) => {
-    setConverge(true)
+    setConverge(true);
 
     try {
-      const s = containerSockets.current[containerId]
+      const s = containerSockets.current[containerId];
       if (!s) {
         console.log('No WebSocket connection available for container ID');
-        return
+        return;
       }
       for (let i = 0; i < amount; i++) {
         const message = {
           type: 'publish',
           message: getRandomColor()
-        }
+        };
 
-        s.send(JSON.stringify(message))
+        s.send(JSON.stringify(message));
       }
     } catch (error) {
       console.error('Error publishing to topic:', error);
@@ -367,8 +432,8 @@ export default function Home() {
       console.log(`No data available for container ID ${containerId}`);
     }
     try {
-      // Extract all WebSocket instances, filtering out nulls
-      const s = containerSockets.current[containerId]
+      // Extract the WebSocket instance
+      const s = containerSockets.current[containerId];
 
       if (!s) {
         throw new Error('No WebSocket connection available for container ID');
@@ -377,32 +442,32 @@ export default function Home() {
       const message = {
         type: 'info',
         message: ''
-      }
+      };
 
-      s.send(JSON.stringify(message))
+      s.send(JSON.stringify(message));
 
       console.log('Info message sent to container');
     } catch (error) {
       console.error('Error sending info message:', error);
     }
-  }
+  };
 
   const handleClickType = () => {
     if (clickType === 'kill') {
-      setClickType('info')
+      setClickType('info');
     } else {
-      setClickType('kill')
+      setClickType('kill');
     }
-  }
+  };
 
   const handleContainerClick = (containerId: string) => {
     if (clickType === 'kill') {
-      stopContainer(containerId)
+      stopContainer(containerId);
     } else {
-      setSelectedContainer(containerId)
-      showContainerInfo(containerId)
+      setSelectedContainer(containerId);
+      showContainerInfo(containerId);
     }
-  }
+  };
 
   const handleProtocolSelect = (protocol: string) => {
     setSelectedProtocols((prevSelected) => {
@@ -420,11 +485,11 @@ export default function Home() {
     if (containerData[containerId]?.[mapType] === undefined) {
       return 'red';
     } else if (converge) {
-      return containerData[containerId]?.lastMessage
+      return containerData[containerId]?.lastMessage;
     } else {
-      return `#${containerId.substring(0, 6)}`
+      return `#${containerId.substring(0, 6)}`;
     }
-  }
+  };
 
   const getBorderStyle = (containerId: string) => {
     if (containerData[containerId]?.type === 'bootstrapper') {
@@ -436,19 +501,29 @@ export default function Home() {
     }
 
     return '0px';
-  }
+  };
 
   // Manage WebSocket connections
   useEffect(() => {
     // Function to handle WebSocket messages and update containerData
     const handleWebSocketMessage = (containerId: string, data: ContainerData) => {
-      setContainerData((prevData) => ({
-        ...prevData,
-        [containerId]: {
-          ...prevData[containerId],
-          ...data, // Merge new data with existing containerData
-        },
-      }));
+      setContainerData((prevData) => {
+        const existing = prevData[containerId];
+        if (!existing) return prevData; // If container is not in the data, skip
+
+        // Merge new data with existing containerData while preserving positions and velocities
+        return {
+          ...prevData,
+          [containerId]: {
+            ...existing,
+            ...data, // Merge new data
+            x: existing.x,
+            y: existing.y,
+            vx: existing.vx,
+            vy: existing.vy,
+          },
+        };
+      });
 
       // Extract protocols from streams
       if (data.streams) {
@@ -471,13 +546,14 @@ export default function Home() {
         });
       }
     };
+
     containers.forEach((container) => {
       // If we don't already have a WebSocket connection for this container
       if (!containerSockets.current[container.id]) {
         // Find the public port that maps to container's port 80
         const portMapping = container.ports.find(
           (port) => port.private_port === 80 && port.type === 'tcp'
-        )
+        );
 
         if (portMapping && portMapping.public_port) {
           const wsUrl = `ws://localhost:${portMapping.public_port}/`;
@@ -529,6 +605,7 @@ export default function Home() {
     });
   }, [containers]);
 
+  // Update connections based on current containerData and mapType
   useEffect(() => {
     const newConnections: { from: string; to: string }[] = [];
 
@@ -573,21 +650,134 @@ export default function Home() {
     setConnections(newConnections);
   }, [containerData, mapType]);
 
+  // Fetch containers periodically
   useEffect(() => {
-    const interval = setInterval(async () => {
-      await fetchContainers()
-    }, 200)
-    return () => clearInterval(interval);
-  }, [containers, fetchContainers]);
+    fetchContainers();
 
+    const interval = setInterval(async () => {
+      await fetchContainers();
+    }, 200);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Auto publish if enabled
   useEffect(() => {
     const interval = setInterval(() => {
       if (autoPublish) {
-        publishToTopic(1)
+        publishToTopic(1);
       }
-    }, 250)
+    }, 250);
     return () => clearInterval(interval);
   }, [autoPublish]);
+
+  // Compound Spring Embedder Force-Directed Layout Implementation
+  useEffect(() => {
+    if (mapView !== 'graph') {
+      return
+    }
+
+    const centerX = CONTAINER_WIDTH / 2;
+    const centerY = CONTAINER_HEIGHT / 2;
+
+    const interval = setInterval(() => {
+      setContainerData((prevData) => {
+        const updatedData: { [id: string]: ContainerData } = { ...prevData };
+
+        Object.values(updatedData).forEach((node) => {
+          let fx = 0;
+          let fy = 0;
+
+          // 1. Repulsive Forces between all node pairs
+          Object.values(updatedData).forEach((otherNode) => {
+            if (node.id === otherNode.id) return;
+
+            const dx = node.x - otherNode.x;
+            const dy = node.y - otherNode.y;
+            let distance = Math.sqrt(dx * dx + dy * dy) || 1;
+
+            // Prevent division by zero and excessive repulsion
+            distance = Math.max(distance, MIN_DISTANCE);
+
+            // Repulsive force calculation
+            const repulsion = REPULSION_FORCE / (distance * distance);
+            fx += (dx / distance) * repulsion;
+            fy += (dy / distance) * repulsion;
+          });
+
+          // 2. Attractive Forces for connected nodes
+          connections.forEach(conn => {
+            if (conn.from === node.id) {
+              const targetNode = updatedData[conn.to];
+              if (targetNode) {
+                const dx = targetNode.x - node.x;
+                const dy = targetNode.y - node.y;
+                const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                // Attractive force calculation following spring-like behavior
+                const attraction = (distance - NATURAL_LENGTH) * ATTRACTION_FORCE;
+                fx += (dx / distance) * attraction;
+                fy += (dy / distance) * attraction;
+              }
+            } else if (conn.to === node.id) {
+              const targetNode = updatedData[conn.from];
+              if (targetNode) {
+                const dx = targetNode.x - node.x;
+                const dy = targetNode.y - node.y;
+                const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                // Attractive force calculation following spring-like behavior
+                const attraction = (distance - NATURAL_LENGTH) * ATTRACTION_FORCE;
+                fx += (dx / distance) * attraction;
+                fy += (dy / distance) * attraction;
+              }
+            }
+          });
+
+          // 3. Central Gravity Force
+          const dxCenter = centerX - node.x;
+          const dyCenter = centerY - node.y;
+          fx += dxCenter * GRAVITY_FORCE;
+          fy += dyCenter * GRAVITY_FORCE;
+
+          // 4. Collision Detection and Resolution
+          Object.values(updatedData).forEach((otherNode) => {
+            if (node.id === otherNode.id) return;
+
+            const dx = node.x - otherNode.x;
+            const dy = node.y - otherNode.y;
+            const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+
+            if (distance < MIN_DISTANCE) {
+              const overlap = MIN_DISTANCE - distance;
+              const collision = (overlap / distance) * COLLISION_FORCE;
+              fx += (dx / distance) * collision;
+              fy += (dy / distance) * collision;
+            }
+          });
+
+          // 5. Update Velocities with Damping
+          node.vx = (node.vx + fx) * DAMPING;
+          node.vy = (node.vy + fy) * DAMPING;
+
+          // 6. Cap Velocities to Prevent Overshooting
+          node.vx = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, node.vx));
+          node.vy = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, node.vy));
+
+          // 7. Update Positions
+          node.x += node.vx;
+          node.y += node.vy;
+
+          // 8. Boundary Enforcement: Keep Nodes Within Container
+          node.x = Math.max(NODE_SIZE / 2, Math.min(CONTAINER_WIDTH - NODE_SIZE / 2, node.x));
+          node.y = Math.max(NODE_SIZE / 2, Math.min(CONTAINER_HEIGHT - NODE_SIZE / 2, node.y));
+        });
+
+        return updatedData;
+      });
+    }, 30); // Update every 30ms for smooth animation
+
+    return () => clearInterval(interval); // Cleanup on unmount
+  }, [connections, mapView]);
 
   return (
     <>
@@ -598,6 +788,7 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <div className="app-container">
+        {/* Sidebar 1: Controls */}
         <div className="sidebar sidebar1">
 
           <h3>Start Containers</h3>
@@ -695,154 +886,302 @@ export default function Home() {
           )}
 
         </div>
+
+        {/* Middle Section: Graph */}
         <div className="middle">
-          <div style={{ position: 'relative', top: '10px', left: '10px', zIndex: 10 }}>
-            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: 10 }}>
-              <h1>{mapType}</h1>
-              {/* Display total number of containers */}
-              <div>{`Total containers: ${containers.length}`}</div>
-              {/* Display the number of running containers (excludes gossip containers) */}
-              <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
+          <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: 10 }}>
+            <h1>{mapType}</h1>
+            <div>{`Total containers: ${containers.length}`}</div>
+            <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
-              {/* Display the number of running gossip containers */}
-              <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
+            <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
 
-              {/* Display number of containers without mapType count */}
-              <div>{`Containers without ${mapType}: ${containers.filter((c) => containerData[c.id]?.[mapType] === undefined).length}`}</div>
-            </div>
+            <div>{`Containers without ${mapType}: ${containers.filter((c) => containerData[c.id]?.[mapType] === undefined).length}`}</div>
+          </div>
+          <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
+            <h6 style={{ marginBottom: '10px' }}>View:</h6>
+            {mapView === 'graph' ? (
+              <div>
+                <span style={{ color: 'white', marginRight: '10px' }}>
+                  <FaCircleNodes />
+                </span>
+                <span style={{ color: 'gray' }} onClick={() => setMapView('circle')}>
+                  <FaRegCircle />
+                </span>
+              </div>
+            ) : (
+              <div>
+                <span style={{ color: 'gray', marginRight: '10px' }} onClick={() => setMapView('graph')}>
+                  <FaCircleNodes />
+                </span>
+                <span style={{ color: 'white' }}>
+                  <FaRegCircle />
+                </span>
+              </div>
+            )}
           </div>
           <div className="container-circle">
-            <svg className="connections">
-              {connections.map((conn, index) => {
-                const fromEl = containerRefs.current[conn.from];
-                const toEl = containerRefs.current[conn.to];
+            {mapView === 'graph' && (
+              <div>
+                <svg className="connections">
+                  {connections.map((conn, index) => {
+                    const fromNode = containerData[conn.from];
+                    const toNode = containerData[conn.to];
 
-                if (fromEl && toEl) {
-                  const fromRect = fromEl.getBoundingClientRect();
-                  const toRect = toEl.getBoundingClientRect();
-
-                  const svgRect = fromEl.parentElement!.getBoundingClientRect();
-
-                  const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
-                  const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
-
-                  const x2 = toRect.left + toRect.width / 2 - svgRect.left;
-                  const y2 = toRect.top + toRect.height / 2 - svgRect.top;
-
-                  // Determine the protocol associated with this connection
-                  let connectionProtocol: string | null = null;
-
-                  if (mapType === 'streams') {
-                    const toPeerId = containerData[conn.to]?.peerId;
-                    const fromStreams = containerData[conn.from]?.streams[toPeerId];
-
-                    if (
-                      toPeerId &&
-                      fromStreams &&
-                      fromStreams.length > 0 &&
-                      typeof fromStreams[0].protocol === 'string' &&
-                      fromStreams[0].protocol.trim() !== ''
-                    ) {
-                      connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
-                    } else {
-                      // Try the reverse: from to to from
-                      const fromPeerId = containerData[conn.from]?.peerId;
-                      const toStreams = containerData[conn.to]?.streams[fromPeerId];
-
-                      if (
-                        fromPeerId &&
-                        toStreams &&
-                        toStreams.length > 0 &&
-                        typeof toStreams[0].protocol === 'string' &&
-                        toStreams[0].protocol.trim() !== ''
-                      ) {
-                        connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                    if (fromNode && toNode) {
+                      // Ensure both nodes have valid positions
+                      if (fromNode.x === undefined || fromNode.y === undefined || toNode.x === undefined || toNode.y === undefined) {
+                        return null;
                       }
+
+                      // Determine the protocol associated with this connection
+                      let connectionProtocol: string | null = null;
+
+                      if (mapType === 'streams') {
+                        const toPeerId = containerData[conn.to]?.peerId;
+                        const fromStreams = containerData[conn.from]?.streams[toPeerId];
+
+                        if (
+                          toPeerId &&
+                          fromStreams &&
+                          fromStreams.length > 0 &&
+                          typeof fromStreams[0].protocol === 'string' &&
+                          fromStreams[0].protocol.trim() !== ''
+                        ) {
+                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
+                        } else {
+                          // Try the reverse: from to to from
+                          const fromPeerId = containerData[conn.from]?.peerId;
+                          const toStreams = containerData[conn.to]?.streams[fromPeerId];
+
+                          if (
+                            fromPeerId &&
+                            toStreams &&
+                            toStreams.length > 0 &&
+                            typeof toStreams[0].protocol === 'string' &&
+                            toStreams[0].protocol.trim() !== ''
+                          ) {
+                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                          }
+                        }
+                      }
+
+                      // If protocols are selected, filter connections
+                      if (selectedProtocols.length > 0 && mapType === 'streams') {
+                        if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
+                          return null; // Do not render this connection
+                        }
+                      }
+
+                      // Determine the stroke color based on the protocol
+                      let strokeColor = '#ffffff'; // Default color
+
+                      if (connectionProtocol) {
+                        // Define a color mapping based on protocol
+                        const protocolColorMap: { [key: string]: string } = {
+                          '/meshsub/1.2.0': '#0fff00',
+                          '/ipfs/id/1.0.0': '#00ff00',
+                          '/ipfs/ping/1.0.0': '#000ff0',
+                          // Add more protocols and their corresponding colors here
+                        };
+                        strokeColor = protocolColorMap[connectionProtocol] || '#000000';
+                      } else {
+                        // For connections without a protocol, use default coloring
+                        strokeColor = `#${conn.from.substring(0, 6)}`;
+                      }
+                      if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
+                        strokeColor = '#ffffff';
+                      }
+
+                      return (
+                        <line
+                          key={index}
+                          x1={fromNode.x}
+                          y1={fromNode.y}
+                          x2={toNode.x}
+                          y2={toNode.y}
+                          stroke={strokeColor}
+                          strokeWidth="2"
+                        />
+                      );
                     }
-                  }
+                    return null;
+                  })}
+                </svg>
 
-                  // If protocols are selected, filter connections
-                  if (selectedProtocols.length > 0 && mapType === 'streams') {
-                    if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
-                      return null; // Do not render this connection
-                    }
-                  }
-
-                  // Determine the stroke color based on the protocol
-                  let strokeColor = '#ffffff'; // Default color
-
-                  if (connectionProtocol) {
-                    // Define a color mapping based on protocol
-                    const protocolColorMap: { [key: string]: string } = {
-                      '/meshsub/1.2.0': '#0fff00',
-                      '/ipfs/id/1.0.0': '#00ff00',
-                      '/ipfs/ping/1.0.0': '#000ff0',
-                      // Add more protocols and their corresponding colors here
-                    };
-                    strokeColor = protocolColorMap[connectionProtocol] || '#000000';
-                  } else {
-                    // For connections without a protocol, use default coloring
-                    strokeColor = `#${conn.from.substring(0, 6)}`;
-                  }
-                  if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
-                    strokeColor = '#ffffff';
-                  }
+                {containers.map((container) => {
+                  const node = containerData[container.id];
+                  if (!node) return null; // Ensure node data exists
 
                   return (
-                    <line
-                      key={index}
-                      x1={x1}
-                      y1={y1}
-                      x2={x2}
-                      y2={y2}
-                      stroke={strokeColor}
-                      strokeWidth="2"
-                    />
+                    <div
+                      key={container.id}
+                      ref={(el) => { containerRefs.current[container.id] = el; }}
+                      className="container-item"
+                      onClick={() => handleContainerClick(container.id)}
+                      onMouseEnter={() => setHoveredContainerId(container.id)}
+                      onMouseLeave={() => setHoveredContainerId(null)}
+                      style={{
+                        width: `${NODE_SIZE}px`,
+                        height: `${NODE_SIZE}px`,
+                        lineHeight: `${NODE_SIZE}px`,
+                        left: `${node.x}px`,
+                        top: `${node.y}px`,
+                        fontSize: `${Math.max(8, NODE_SIZE / 3)}px`,
+                        backgroundColor: `${getBackgroundColor(container.id)}`,
+                        border: `${getBorderStyle(container.id)}`,
+                        position: 'absolute',
+                        transform: `translate(-50%, -50%)`, // Center the node
+                        transition: 'left 0.1s, top 0.1s, background-color 0.3s, border 0.3s', // Smooth transitions
+                      }}
+                      title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
+                    >
+                      {container.image.split(':')[0]}
+                    </div>
                   );
-                }
-                return null;
-              })}
-            </svg>
+                })}
+              </div>
+            )}
 
-            {containers.map((container, index) => {
-              const numContainers = containers.length;
+            {mapView === 'circle' && (
+              <div>
+                <svg className="connections">
+                  {connections.map((conn, index) => {
+                    const fromEl = containerRefs.current[conn.from];
+                    const toEl = containerRefs.current[conn.to];
 
-              // Arrange containers in a single circle
-              const angle = (index / numContainers) * 360;
-              const radius = 320; // Fixed radius
+                    if (fromEl && toEl) {
+                      const fromRect = fromEl.getBoundingClientRect();
+                      const toRect = toEl.getBoundingClientRect();
 
-              // Adjust item size based on number of containers
-              const minItemSize = 20;
-              const maxItemSize = 80;
-              const itemSize = Math.max(minItemSize, maxItemSize - numContainers);
+                      const svgRect = fromEl.parentElement!.getBoundingClientRect();
 
-              const fontSize = itemSize / 4; // Adjust font size proportionally
+                      const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
+                      const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
 
-              return (
-                <div
-                  key={container.id}
-                  ref={(el) => { containerRefs.current[container.id] = el; }}
-                  className="container-item"
-                  onClick={() => handleContainerClick(container.id)}
-                  onMouseEnter={() => setHoveredContainerId(container.id)}
-                  onMouseLeave={() => setHoveredContainerId(null)}
-                  style={{
-                    width: `${itemSize}px`,
-                    height: `${itemSize}px`,
-                    lineHeight: `${itemSize}px`,
-                    transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
-                    fontSize: `${fontSize}px`,
-                    backgroundColor: `${getBackgroundColor(container.id)}`,
-                    border: `${getBorderStyle(container.id)}`
-                  }}
-                  title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
-                >
-                  {container.image.split(':')[0]}
-                </div>
-              );
-            })}
+                      const x2 = toRect.left + toRect.width / 2 - svgRect.left;
+                      const y2 = toRect.top + toRect.height / 2 - svgRect.top;
+
+                      // Determine the protocol associated with this connection
+                      let connectionProtocol: string | null = null;
+
+                      if (mapType === 'streams') {
+                        const toPeerId = containerData[conn.to]?.peerId;
+                        const fromStreams = containerData[conn.from]?.streams[toPeerId];
+
+                        if (
+                          toPeerId &&
+                          fromStreams &&
+                          fromStreams.length > 0 &&
+                          typeof fromStreams[0].protocol === 'string' &&
+                          fromStreams[0].protocol.trim() !== ''
+                        ) {
+                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
+                        } else {
+                          // Try the reverse: from to to from
+                          const fromPeerId = containerData[conn.from]?.peerId;
+                          const toStreams = containerData[conn.to]?.streams[fromPeerId];
+
+                          if (
+                            fromPeerId &&
+                            toStreams &&
+                            toStreams.length > 0 &&
+                            typeof toStreams[0].protocol === 'string' &&
+                            toStreams[0].protocol.trim() !== ''
+                          ) {
+                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                          }
+                        }
+                      }
+
+                      // If protocols are selected, filter connections
+                      if (selectedProtocols.length > 0 && mapType === 'streams') {
+                        if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
+                          return null; // Do not render this connection
+                        }
+                      }
+
+                      // Determine the stroke color based on the protocol
+                      let strokeColor = '#ffffff'; // Default color
+
+                      if (connectionProtocol) {
+                        // Define a color mapping based on protocol
+                        const protocolColorMap: { [key: string]: string } = {
+                          '/meshsub/1.2.0': '#0fff00',
+                          '/ipfs/id/1.0.0': '#00ff00',
+                          '/ipfs/ping/1.0.0': '#000ff0',
+                          // Add more protocols and their corresponding colors here
+                        };
+                        strokeColor = protocolColorMap[connectionProtocol] || '#000000';
+                      } else {
+                        // For connections without a protocol, use default coloring
+                        strokeColor = `#${conn.from.substring(0, 6)}`;
+                      }
+                      if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
+                        strokeColor = '#ffffff';
+                      }
+
+                      return (
+                        <line
+                          key={index}
+                          x1={x1}
+                          y1={y1}
+                          x2={x2}
+                          y2={y2}
+                          stroke={strokeColor}
+                          strokeWidth="2"
+                        />
+                      );
+                    }
+                    return null;
+                  })}
+                </svg>
+
+                {containers.map((container, index) => {
+                  const numContainers = containers.length;
+
+                  // Arrange containers in a single circle
+                  const angle = (index / numContainers) * 360;
+                  const radius = 320; // Fixed radius
+
+                  // Adjust item size based on number of containers
+                  const minItemSize = 20;
+                  const maxItemSize = 80;
+                  const itemSize = Math.max(minItemSize, maxItemSize - numContainers);
+
+                  const fontSize = itemSize / 4; // Adjust font size proportionally
+
+                  return (
+                    <div
+                      key={container.id}
+                      ref={(el) => { containerRefs.current[container.id] = el; }}
+                      className="container-item"
+                      onClick={() => handleContainerClick(container.id)}
+                      onMouseEnter={() => setHoveredContainerId(container.id)}
+                      onMouseLeave={() => setHoveredContainerId(null)}
+                      style={{
+                        width: `${itemSize}px`,
+                        height: `${itemSize}px`,
+                        lineHeight: `${itemSize}px`,
+                        left: '50%',
+                        top: '50%',
+                        transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
+                        fontSize: `${fontSize}px`,
+                        backgroundColor: `${getBackgroundColor(container.id)}`,
+                        border: `${getBorderStyle(container.id)}`
+                      }}
+                      title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
+                    >
+                      {container.image.split(':')[0]}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
+
+        {/* Sidebar 2: Information and Actions */}
         <div className="sidebar sidebar2">
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
@@ -874,6 +1213,8 @@ export default function Home() {
             </div>
           )}
         </div>
+
+        {/* Styling */}
         <style jsx>{`
         .app-container {
           display: flex;
@@ -884,6 +1225,9 @@ export default function Home() {
           width: 250px;
           padding: 15px;
           background-color: #111111;
+          color: white;
+          overflow-y: auto;
+          max-height: 100vh;
         }
 
         .sidebar h1 {
@@ -918,9 +1262,18 @@ export default function Home() {
         .sidebar button {
           display: block;
           margin-bottom: 10px;
-          padding: 5px;
+          padding: 10px;
           font-size: 16px;
           cursor: pointer;
+          width: 100%;
+          border: none;
+          border-radius: 4px;
+          background-color: #0070f3;
+          color: white;
+        }
+
+        .sidebar button:hover {
+          background-color: #005bb5;
         }
 
         .sidebar button.selected {
@@ -929,12 +1282,16 @@ export default function Home() {
 
         .middle {
           flex-grow: 1;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          position: relative;
         }
 
         .container-circle {
           position: relative;
-          width: 800px;
-          height: 800px;
+          width: ${CONTAINER_WIDTH}px;
+          height: ${CONTAINER_HEIGHT}px;
           margin: 0 auto;
           overflow: hidden;
           user-select: none;
@@ -946,6 +1303,7 @@ export default function Home() {
           height: 100%;
           top: 0;
           left: 0;
+          pointer-events: none; /* Allow clicks to pass through */
         }
 
         .container-item {
@@ -955,10 +1313,8 @@ export default function Home() {
           border-radius: 50%;
           text-align: center;
           cursor: pointer;
-          left: 50%;
-          top: 50%;
-          transform-origin: 0 0;
-          transition: transform 0.5s;
+          transform-origin: 50% 50%;
+          transition: left 0.1s, top 0.1s, background-color 0.3s, border 0.3s; /* Smooth transitions */
           overflow: hidden;
           white-space: nowrap;
           text-overflow: ellipsis;
@@ -981,6 +1337,8 @@ export default function Home() {
         .protocol-list ul {
           list-style-type: none;
           padding-left: 0;
+          max-height: 200px;
+          overflow-y: auto;
         }
 
         .protocol-list li {
@@ -990,8 +1348,54 @@ export default function Home() {
         .protocol-list label {
           cursor: pointer;
         }
+
+        /* Sidebar 2 Styles */
+        .sidebar2 {
+          width: 250px;
+          padding: 15px;
+          background-color: #222222;
+          color: white;
+        }
+
+        .sidebar2 button {
+          display: block;
+          margin-bottom: 10px;
+          padding: 10px;
+          font-size: 16px;
+          cursor: pointer;
+          width: 100%;
+          border: none;
+          border-radius: 4px;
+          background-color: #0070f3;
+          color: white;
+        }
+
+        .sidebar2 button:hover {
+          background-color: #005bb5;
+        }
+
+        .sidebar2 h3 {
+          margin-top: 20px;
+        }
+
+        /* Scrollbar Styles */
+        .sidebar::-webkit-scrollbar,
+        .sidebar2::-webkit-scrollbar {
+          width: 8px;
+        }
+
+        .sidebar::-webkit-scrollbar-track,
+        .sidebar2::-webkit-scrollbar-track {
+          background: #333333;
+        }
+
+        .sidebar::-webkit-scrollbar-thumb,
+        .sidebar2::-webkit-scrollbar-thumb {
+          background-color: #555555;
+          border-radius: 4px;
+        }
       `}</style>
-      </div>
+      </div >
     </>
   );
 }

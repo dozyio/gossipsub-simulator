@@ -39,6 +39,7 @@ export interface Update {
 }
 
 export class StatusServer {
+  // server details
   private server: Libp2pType
   private type: string
   private peerId: PeerId
@@ -70,6 +71,8 @@ export class StatusServer {
   private wssAlive: boolean
   private started: boolean
   private scheduleUpdate!: NodeJS.Timeout
+  private updateCount: number = 0
+  private maxUpdatesBeforeFullData: number = 20
 
   constructor(server: Libp2pType, type: string, topic: string) {
     this.server = server
@@ -269,7 +272,7 @@ export class StatusServer {
       update.meshPeers = meshPeers
     }
 
-    // has own handler
+    // messages have own handler
     // if (this.lastMessage !== this._message) {
     //   this.lastMessage = this._message
     //   update.lastMessage = this.lastMessage
@@ -287,6 +290,79 @@ export class StatusServer {
     return update
   }
 
+  private fullUpdate = async (): Promise<Update> => {
+    const update: Update = {}
+
+    // libp2p
+    const peerId = this.peerId.toString()
+    this.lastPeerId = peerId
+    update.peerId = peerId
+
+    const type = this.type
+    this.lastType = type
+    update.type = type
+
+    const topic = this.topic
+    this.lastTopic = topic
+    update.topic = topic
+
+    const libp2pPeerList = await this.server.peerStore.all()
+    const libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
+    this.lastLibp2pPeers = libp2pPeers
+    update.libp2pPeers = libp2pPeers
+
+    const connectionList = this.server.getConnections()
+    const connections = connectionList.map((connection) => connection.remotePeer.toString())
+    this.lastConnections = connections
+    update.connections = connections
+
+    const streams = this.getStreams()
+    this.lastStreams = streams
+    update.streams = streams
+
+    const protocols = this.server.getProtocols()
+    this.lastProtocols = protocols
+    update.protocols = protocols
+
+    const multiaddrList = this.server.getMultiaddrs()
+    const multiaddrs = multiaddrList.map((ma) => ma.toString())
+    this.lastMultiaddrs = multiaddrs
+    update.multiaddrs = multiaddrs
+
+    // pubsub
+    const topics = this.server.services.pubsub.getTopics()
+    this.lastTopics = topics
+    update.topics = topics
+
+    const subscriberList = this.server.services.pubsub.getSubscribers(this.topic)
+    const subscribers = subscriberList.map((peerId: PeerId) => peerId.toString())
+    this.lastSubscribers = subscribers
+    update.subscribers = subscribers
+
+    const pubsubPeerList = this.server.services.pubsub.getPeers()
+    const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+    this.lastPubsubPeers = pubsubPeers
+    update.pubsubPeers = pubsubPeers
+
+    const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(this.topic)
+    const meshPeers = meshPeerList.map((peer: PeerIdStr) => peer)
+    this.lastMeshPeers = meshPeers
+    update.meshPeers = meshPeers
+
+    this.lastMessage = this._message
+    update.lastMessage = this.lastMessage
+
+    // dht
+    // @ts-ignore-next-line
+    const dhtPeerList = [...this.server.services.lanDHT.routingTable.kb.toIterable()];
+    const dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
+    this.lastDhtPeers = dhtPeers
+    update.dhtPeers = dhtPeers
+
+    return update
+  }
+
+
   private sendUpdate = async (update: Update) => {
     if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage) {
       this.wss.clients.forEach((ws) => {
@@ -301,8 +377,16 @@ export class StatusServer {
 
   private scheduleUpdates = () => {
     const updateInterval = setInterval(async () => {
-      const update = await this.newUpdate()
-      await this.sendUpdate(update)
+      this.updateCount++
+
+      if (this.updateCount >= this.maxUpdatesBeforeFullData) {
+        this.updateCount = 0
+        const update = await this.fullUpdate()
+        await this.sendUpdate(update)
+      } else {
+        const update = await this.newUpdate()
+        await this.sendUpdate(update)
+      }
     }, 100)
 
     return updateInterval
