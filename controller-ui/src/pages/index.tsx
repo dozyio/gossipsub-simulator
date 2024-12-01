@@ -26,6 +26,10 @@ interface StreamsByPeer {
   [peerId: string]: Stream[];
 }
 
+interface PeerScores{
+  [peerId: string]: number;
+}
+
 interface ContainerData {
   peerId: string;
   pubsubPeers: string[];
@@ -40,12 +44,16 @@ interface ContainerData {
   topics: string[];
   type: string;
   lastMessage: string;
+  peerScore: PeerScores;
 }
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
 type ClickType = 'kill' | 'info'
 
 const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace'
+
+const LATENCY_MIN = 5
+const LATENCY_MAX = 250
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
@@ -62,6 +70,7 @@ export default function Home() {
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
+  const [latencyContainer, setLatencyContainer] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
 
   // Function to fetch containers from the backend
@@ -134,6 +143,10 @@ export default function Home() {
       env.push(DEBUG_STRING)
     }
 
+    if (latencyContainer) {
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+    }
+
     await startContainer('bootstrapper:dev', env, "bootstrapper1")
   };
   const handleStartBootstrap2 = async () => {
@@ -146,6 +159,10 @@ export default function Home() {
       env.push(DEBUG_STRING)
     }
 
+    if (latencyContainer) {
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+    }
+
     await startContainer('bootstrapper:dev', env, "bootstrapper2")
   };
 
@@ -155,6 +172,10 @@ export default function Home() {
 
     if (debugContainer) {
       env.push(DEBUG_STRING)
+    }
+
+    if (latencyContainer) {
+      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
     }
 
     await startContainer(imageName, env)
@@ -170,6 +191,10 @@ export default function Home() {
     try {
       const promises = [];
       for (let i = 0; i < amount; i++) {
+        if (latencyContainer) {
+          env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`)
+        }
+
         promises.push(
           startContainer(imageName, env)
         );
@@ -309,14 +334,14 @@ export default function Home() {
     }
   };
 
-  const designateSpammer = async (containerId: string, amount = 100_000) => {
+  const publishToPeer = async (containerId: string, amount = 1) => {
     setConverge(true)
 
     try {
-     const s =  containerSockets.current[containerId]
-     if (!s) {
-       console.log('No WebSocket connection available for container ID');
-       return
+      const s = containerSockets.current[containerId]
+      if (!s) {
+        console.log('No WebSocket connection available for container ID');
+        return
       }
       for (let i = 0; i < amount; i++) {
         const message = {
@@ -598,6 +623,18 @@ export default function Home() {
               </span>
             </label>
           </div>
+          <div className="input-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={latencyContainer}
+                onChange={() => setLatencyContainer(!latencyContainer)}
+              />
+              <span style={{ marginLeft: '5px' }}>
+                Start with Latency
+              </span>
+            </label>
+          </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
             <button onClick={handleStartBootstrap1}>Bootstrap1</button>
@@ -810,14 +847,19 @@ export default function Home() {
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
-          <button onClick={() => publishToTopic(1)}>Publish to topic</button>
-          <button onClick={() => publishToTopic(1000)}>Publish 1000 to topic</button>
+          <button onClick={() => publishToTopic(1)}>Publish to random peer</button>
+          <button onClick={() => publishToTopic(1000)}>Publish 1k to random peers</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           {selectedContainer && (
             <div>
               <h3>Peer Info</h3>
-              <button onClick={() => stopContainer(selectedContainer)}>Kill</button>
-              <button onClick={() => designateSpammer(selectedContainer, 100_000)}>Spam 100k</button>
+
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+                <button onClick={() => publishToPeer(selectedContainer, 1)}>Publish 1</button>
+                <button onClick={() => publishToPeer(selectedContainer, 1_000)}>Publish 1k</button>
+                <button onClick={() => publishToPeer(selectedContainer, 100_000)}>Publish 100k</button>
+                <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
+              </div>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>

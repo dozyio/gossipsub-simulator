@@ -33,7 +33,7 @@ var (
 	logStreamersMutex      sync.Mutex
 )
 
-const appLabel = "punisher"
+const appLabel = "simulator"
 
 type ContainerInfo struct {
 	ID     string        `json:"id"`
@@ -56,8 +56,13 @@ type ContainerLogStreamer struct {
 	stopChan    chan struct{}
 }
 
+type NetworkConfig struct {
+	Delay string
+	Loss  string
+}
+
 // ListContainers lists all Docker containers (running and stopped)
-func ListContainers() ([]ContainerInfo, error) {
+func listContainers() ([]ContainerInfo, error) {
 	ctx := context.Background()
 
 	containers, err := DockerClient.ContainerList(ctx, container.ListOptions{All: false})
@@ -92,8 +97,8 @@ func ListContainers() ([]ContainerInfo, error) {
 	return containerInfos, nil
 }
 
-// / StartContainer starts a Docker container given its container ID or name
-func StartContainer(containerID string) error {
+// / startContainer starts a Docker container given its container ID or name
+func startContainer(containerID string) error {
 	ctx := context.Background()
 	if err := DockerClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container %s: %w", containerID, err)
@@ -105,45 +110,6 @@ func StartContainer(containerID string) error {
 	startedContainersMutex.Unlock()
 
 	return nil
-}
-
-func CreateContainerHandler(w http.ResponseWriter, r *http.Request) {
-	type RequestBody struct {
-		Image    string   `json:"image"`
-		Name     string   `json:"name,omitempty"`
-		Port     int      `json:"port,omitempty"`
-		Env      []string `json:"env,omitempty"`
-		Hostname string   `json:"hostname,omitempty"`
-	}
-
-	var reqBody RequestBody
-	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if reqBody.Port == 0 {
-		http.Error(w, "Port number is required", http.StatusBadRequest)
-		return
-	}
-
-	containerID, hostPort, err := CreateAndStartContainer(
-		reqBody.Image,
-		reqBody.Name,
-		reqBody.Port,
-		reqBody.Env,
-		reqBody.Hostname,
-	)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Failed to create and start container: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"container_id": containerID,
-		"host_port":    hostPort,
-	})
 }
 
 // Helper function to check if an image exists locally
@@ -164,9 +130,9 @@ func imageExists(cli *client.Client, ctx context.Context, imageName string) (boo
 	return false, nil
 }
 
-// EnsureNetwork ensures that the specified Docker network exists.
+// ensureNetwork ensures that the specified Docker network exists.
 // If the network does not exist, it creates one with the given name.
-func EnsureNetwork(cli *client.Client, networkName string) error {
+func ensureNetwork(cli *client.Client, networkName string) error {
 	ctx := context.Background()
 
 	// List existing networks to check if the network already exists
@@ -184,7 +150,7 @@ func EnsureNetwork(cli *client.Client, networkName string) error {
 	return nil
 }
 
-func CreateAndStartContainer(imageName, containerName string, containerPort int, env []string, hostname string) (string, int, error) {
+func createAndStartContainer(imageName, containerName string, containerPort int, env []string, hostname string) (string, int, error) {
 	ctx := context.Background()
 	cli := DockerClient
 
@@ -193,7 +159,7 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int,
 		return "", 0, fmt.Errorf("NETWORK environment variable is not set")
 	}
 
-	if err := EnsureNetwork(cli, networkName); err != nil {
+	if err := ensureNetwork(cli, networkName); err != nil {
 		return "", 0, fmt.Errorf("network setup failed: %w", err)
 	}
 
@@ -279,6 +245,20 @@ func CreateAndStartContainer(imageName, containerName string, containerPort int,
 	}
 
 	go startLogStreaming(resp.ID)
+
+	// Handle NETWORK_CONFIG
+	networkConfigStr := getEnvValue(env, "NETWORK_CONFIG")
+	if networkConfigStr != "" {
+		fmt.Printf("Applying NETWORK_CONFIG to container %s: %s\n", resp.ID[:12], networkConfigStr)
+		networkConfig, err := parseNetworkConfig(networkConfigStr)
+		if err != nil {
+			fmt.Printf("Failed to parse NETWORK_CONFIG for container %s: %v\n", resp.ID[:12], err)
+		} else {
+			if err := applyNetworkConfig(ctx, cli, resp.ID, networkConfig); err != nil {
+				fmt.Printf("Failed to apply NETWORK_CONFIG to container %s: %v\n", resp.ID[:12], err)
+			}
+		}
+	}
 
 	// Retrieve the host port
 	containerJSON, err := cli.ContainerInspect(ctx, resp.ID)
@@ -445,8 +425,8 @@ func stopLogStreaming(containerID string) {
 	}
 }
 
-// StopContainer stops a Docker container given its container ID or name
-func StopContainer(containerID string) error {
+// stopContainer stops a Docker container given its container ID or name
+func stopContainer(containerID string) error {
 	ctx := context.Background()
 
 	containerJSON, err := DockerClient.ContainerInspect(ctx, containerID)
@@ -471,8 +451,8 @@ func StopContainer(containerID string) error {
 	return nil
 }
 
-// StopAllContainers stops and removes all Docker containers managed by this app
-func StopAllContainers() error {
+// stopAllContainers stops and removes all Docker containers managed by this app
+func stopAllContainers() error {
 	ctx := context.Background()
 
 	// Filter containers by label
@@ -525,21 +505,145 @@ func StopAllContainers() error {
 	return nil
 }
 
-// RemoveContainer removes a Docker container given its container ID or name
-func RemoveContainer(containerID string) error {
-	ctx := context.Background()
-	if err := DockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
-		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
+// // removeContainer removes a Docker container given its container ID or name
+// func removeContainer(containerID string) error {
+// 	ctx := context.Background()
+// 	if err := DockerClient.ContainerRemove(ctx, containerID, container.RemoveOptions{}); err != nil {
+// 		return fmt.Errorf("failed to remove container %s: %w", containerID, err)
+// 	}
+//
+// 	fmt.Printf("Container %s removed successfully.\n", containerID)
+//
+// 	return nil
+// }
+
+// parseNetworkConfig parses the NETWORK_CONFIG environment variable into a NetworkConfig struct.
+func parseNetworkConfig(configStr string) (*NetworkConfig, error) {
+	config := &NetworkConfig{}
+	pairs := strings.Split(configStr, " ")
+	fmt.Printf("pairs: %v\n", pairs)
+
+	for _, pair := range pairs {
+		kv := strings.SplitN(pair, "=", 2)
+		fmt.Printf("kv : %v\n", kv)
+		if len(kv) != 2 {
+			return nil, fmt.Errorf("invalid network config pair: %s", pair)
+		}
+
+		key := strings.ToLower(strings.TrimSpace(kv[0]))
+		value := strings.TrimSpace(kv[1])
+
+		switch key {
+		case "delay":
+			config.Delay = value
+		case "loss":
+			config.Loss = value
+		// Add cases for other network parameters as needed
+		default:
+			return nil, fmt.Errorf("unsupported network config key: %s", key)
+		}
 	}
 
-	fmt.Printf("Container %s removed successfully.\n", containerID)
+	fmt.Printf("NETWORK_CONFIG: %v\n", config)
+
+	return config, nil
+}
+
+// executeTCCommand executes a tc command inside the container
+func executeTCCommand(ctx context.Context, cli *client.Client, containerID string, cmd []string) error {
+	execConfig := container.ExecOptions{
+		Cmd:          cmd,
+		AttachStdout: true,
+		AttachStderr: true,
+	}
+
+	execIDResp, err := cli.ContainerExecCreate(ctx, containerID, execConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create exec instance: %w", err)
+	}
+
+	execAttachResp, err := cli.ContainerExecAttach(ctx, execIDResp.ID, container.ExecStartOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to attach to exec instance: %w", err)
+	}
+	defer execAttachResp.Close()
+
+	// Read the output (optional)
+	output, err := io.ReadAll(execAttachResp.Reader)
+	if err != nil {
+		return fmt.Errorf("failed to read exec output: %w", err)
+	}
+
+	// Inspect the exec instance to get the exit code
+	execInspect, err := cli.ContainerExecInspect(ctx, execIDResp.ID)
+	if err != nil {
+		return fmt.Errorf("failed to inspect exec instance: %w", err)
+	}
+
+	if execInspect.ExitCode != 0 {
+		return fmt.Errorf("command %v exited with code %d: %s", cmd, execInspect.ExitCode, string(output))
+	}
 
 	return nil
 }
 
-// ListContainersHandler handles the GET /containers endpoint
-func ListContainersHandler(w http.ResponseWriter, r *http.Request) {
-	containerInfos, err := ListContainers()
+// applyNetworkConfig applies network configurations to the container
+func applyNetworkConfig(ctx context.Context, cli *client.Client, containerID string, config *NetworkConfig) error {
+	// Install iproute2 if tc is not available
+	installCmd := []string{"sh", "-c", "which tc || apk update && apk add iproute2 iptables"}
+
+	if err := executeTCCommand(ctx, cli, containerID, installCmd); err != nil {
+		return fmt.Errorf("failed to install iproute2 in container %s: %w", containerID[:12], err)
+	}
+
+	// Delete existing qdisc if any to prevent conflicts
+	delCmd := []string{"tc", "qdisc", "del", "dev", "eth0", "root"}
+	if err := executeTCCommand(ctx, cli, containerID, delCmd); err != nil {
+		// It's okay if the deletion fails because there might be no existing qdisc
+		fmt.Printf("Warning: failed to delete existing qdisc for container %s: %v\n", containerID[:12], err)
+	}
+
+	// Build the netem command with multiple parameters
+	var netemParams []string
+
+	if config.Delay != "" {
+		netemParams = append(netemParams, "delay", config.Delay)
+	}
+
+	if config.Loss != "" {
+		netemParams = append(netemParams, "loss", config.Loss)
+	}
+
+	if len(netemParams) == 0 {
+		return fmt.Errorf("no valid network configurations provided")
+	}
+
+	cmd := append([]string{"tc", "qdisc", "add", "dev", "eth0", "root", "netem"}, netemParams...)
+
+	if err := executeTCCommand(ctx, cli, containerID, cmd); err != nil {
+		return fmt.Errorf("failed to apply network config to container %s: %w", containerID[:12], err)
+	}
+
+	fmt.Printf("Network config applied successfully to container %s: %v\n", containerID[:12], netemParams)
+
+	return nil
+}
+
+// getEnvValue retrieves the value of the specified environment variable from the env slice.
+// Returns an empty string if the variable is not found.
+func getEnvValue(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return ""
+}
+
+// listContainersHandler handles the GET /containers endpoint
+func listContainersHandler(w http.ResponseWriter, r *http.Request) {
+	containerInfos, err := listContainers()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to list containers: %v", err), http.StatusInternalServerError)
 		return
@@ -549,8 +653,8 @@ func ListContainersHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(containerInfos)
 }
 
-// StartContainerHandler handles the POST /containers/start endpoint
-func StartContainerHandler(w http.ResponseWriter, r *http.Request) {
+// startContainerHandler handles the POST /containers/start endpoint
+func startContainerHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		ContainerID string `json:"container_id"`
 	}
@@ -561,7 +665,7 @@ func StartContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := StartContainer(reqBody.ContainerID); err != nil {
+	if err := startContainer(reqBody.ContainerID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start container %s: %v", reqBody.ContainerID, err), http.StatusInternalServerError)
 		return
 	}
@@ -569,8 +673,8 @@ func StartContainerHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// StopContainerHandler handles the POST /containers/stop endpoint
-func StopContainerHandler(w http.ResponseWriter, r *http.Request) {
+// stopContainerHandler handles the POST /containers/stop endpoint
+func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		ContainerID string `json:"container_id"`
 	}
@@ -581,7 +685,7 @@ func StopContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := StopContainer(reqBody.ContainerID); err != nil {
+	if err := stopContainer(reqBody.ContainerID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to stop container %s: %v", reqBody.ContainerID, err), http.StatusInternalServerError)
 		return
 	}
@@ -589,14 +693,53 @@ func StopContainerHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// StopAllContainersHandler handles the POST /containers/stopall endpoint
-func StopAllContainersHandler(w http.ResponseWriter, r *http.Request) {
-	if err := StopAllContainers(); err != nil {
+// stopAllContainersHandler handles the POST /containers/stopall endpoint
+func stopAllContainersHandler(w http.ResponseWriter, r *http.Request) {
+	if err := stopAllContainers(); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to stop all containers: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func createContainerHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		Image    string   `json:"image"`
+		Name     string   `json:"name,omitempty"`
+		Port     int      `json:"port,omitempty"`
+		Env      []string `json:"env,omitempty"`
+		Hostname string   `json:"hostname,omitempty"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if reqBody.Port == 0 {
+		http.Error(w, "Port number is required", http.StatusBadRequest)
+		return
+	}
+
+	containerID, hostPort, err := createAndStartContainer(
+		reqBody.Image,
+		reqBody.Name,
+		reqBody.Port,
+		reqBody.Env,
+		reqBody.Hostname,
+	)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create and start container: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"container_id": containerID,
+		"host_port":    hostPort,
+	})
 }
 
 func enableCors(next http.Handler) http.Handler {
@@ -658,18 +801,18 @@ func main() {
 		log.Fatalf("Failed to create Docker client: %v", err)
 	}
 
-	if err := EnsureNetwork(DockerClient, networkName); err != nil {
+	if err := ensureNetwork(DockerClient, networkName); err != nil {
 		log.Fatalf("NETWORK %s does not exist", networkName)
 	}
 
 	// Register handlers
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/containers", ListContainersHandler)
-	mux.HandleFunc("/containers/start", StartContainerHandler)
-	mux.HandleFunc("/containers/stop", StopContainerHandler)
-	mux.HandleFunc("/containers/create", CreateContainerHandler)
-	mux.HandleFunc("/containers/stopall", StopAllContainersHandler)
+	mux.HandleFunc("/containers", listContainersHandler)
+	mux.HandleFunc("/containers/start", startContainerHandler)
+	mux.HandleFunc("/containers/stop", stopContainerHandler)
+	mux.HandleFunc("/containers/create", createContainerHandler)
+	mux.HandleFunc("/containers/stopall", stopAllContainersHandler)
 
 	handler := enableCors(mux)
 

@@ -130,6 +130,8 @@ export class StatusServer {
 
         switch (newMessage.type) {
           case 'info':
+            console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
+
             const update: Update = {
               peerScores: {}
             }
@@ -150,7 +152,7 @@ export class StatusServer {
             try {
               self.server.services.pubsub.publish(self.topic, fromString(newMessage.message))
               const update: Update = {
-                lastMessage: newMessage.message 
+                lastMessage: newMessage.message
               }
               await self.sendUpdate(update)
             } catch (e) {
