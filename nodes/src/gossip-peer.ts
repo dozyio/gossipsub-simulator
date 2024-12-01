@@ -17,6 +17,7 @@ import { StatusServer } from './status-server'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
 import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId } from './consts'
+import { defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 
 (async () => {
   try {
@@ -64,14 +65,20 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
           emitSelf: false,
           allowPublishToZeroTopicPeers: true, // don't throw if no peers
           scoreParams: {
-            IPColocationFactorWeight: 0,
+            // IPColocationFactorWeight: 0,
             // behaviourPenaltyWeight: 0,
-            appSpecificScore: applicationScore
+            appSpecificScore: applicationScore,
+            topics: {
+              "`${topic}`": defaultTopicScoreParams
+            }
           },
           scoreThresholds: {
-            gossipThreshold: -4000,
-            publishThreshold: -8000,
-            graylistThreshold: -16000,
+            // gossipThreshold: -4000,
+            // publishThreshold: -8000,
+            // graylistThreshold: -16000,
+            gossipThreshold: -10,
+            publishThreshold: -50,
+            graylistThreshold: -80,
             acceptPXThreshold: 100,
             opportunisticGraftThreshold: 5,
           }
@@ -150,7 +157,7 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
       if (!hasBootstrapperConn) {
         try {
           console.log('dialing bootstrapper2...')
-           const bsConn = await server.dial(multiaddr(bootstrapper2Ma))
+          const bsConn = await server.dial(multiaddr(bootstrapper2Ma))
           if (!bsConn) {
             console.log('no connection')
             return

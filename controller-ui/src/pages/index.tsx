@@ -309,6 +309,28 @@ export default function Home() {
     }
   };
 
+  const designateSpammer = async (containerId: string, amount = 100_000) => {
+    setConverge(true)
+
+    try {
+     const s =  containerSockets.current[containerId]
+     if (!s) {
+       console.log('No WebSocket connection available for container ID');
+       return
+      }
+      for (let i = 0; i < amount; i++) {
+        const message = {
+          type: 'publish',
+          message: getRandomColor()
+        }
+
+        s.send(JSON.stringify(message))
+      }
+    } catch (error) {
+      console.error('Error publishing to topic:', error);
+    }
+  };
+
   const showContainerInfo = (containerId: string) => {
     console.log('Checking containerData for:', containerId);
     console.log('Current containerData:', containerData);
@@ -546,7 +568,7 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Docker Containers</title>
+        <title>GossipSub Simulator</title>
         <meta name="description" content="Manage Docker containers" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
@@ -777,7 +799,7 @@ export default function Home() {
                     backgroundColor: `${getBackgroundColor(container.id)}`,
                     border: `${getBorderStyle(container.id)}`
                   }}
-                  title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
+                  title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                 >
                   {container.image.split(':')[0]}
                 </div>
@@ -786,7 +808,7 @@ export default function Home() {
           </div>
         </div>
         <div className="sidebar sidebar2">
-          <h1>Gossip Simulator</h1>
+          <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
           <button onClick={() => publishToTopic(1)}>Publish to topic</button>
@@ -794,8 +816,9 @@ export default function Home() {
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           {selectedContainer && (
             <div>
-              <h3>Info</h3>
+              <h3>Peer Info</h3>
               <button onClick={() => stopContainer(selectedContainer)}>Kill</button>
+              <button onClick={() => designateSpammer(selectedContainer, 100_000)}>Spam 100k</button>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
