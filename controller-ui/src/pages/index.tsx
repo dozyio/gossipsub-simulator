@@ -160,7 +160,7 @@ export default function Home() {
     await startContainer(imageName, env)
   };
 
-  const handleStartXContainers = async () => {
+  const handleStartXContainers = async (amount = 12) => {
     const env = []
 
     if (debugContainer) {
@@ -169,18 +169,12 @@ export default function Home() {
 
     try {
       const promises = [];
-      for (let i = 0; i < 12; i++) {
+      for (let i = 0; i < amount; i++) {
         promises.push(
           startContainer(imageName, env)
         );
       }
       await Promise.all(promises);
-      // for (const response of responses) {
-      //   if (!response.ok) {
-      //     const errorText = await response.text();
-      //     throw new Error(`Error starting container: ${errorText}`);
-      //   }
-      // }
       await fetchContainers(); // Refresh the container list
     } catch (error) {
       console.error('Error starting containers:', error);
@@ -230,8 +224,10 @@ export default function Home() {
     }
   };
 
-  const stopXContainers = async (amount = 10) => {
-    const shuffled = containers.slice();
+  const stopXContainers = async (amount = 5) => {
+    // only stop gossip containers
+    const gossipContainers = containers.filter((c) => c.image.includes('gossip'));
+    const shuffled = gossipContainers.slice();
 
     for (let i = shuffled.length - 1; i > 0; i--) {
       // Generate a random index from 0 to i
@@ -380,6 +376,23 @@ export default function Home() {
       }
     });
   };
+
+  const getBackgroundColor = (containerId: string) => {
+    if (containerData[containerId]?.[mapType] === undefined) {
+      return 'red';
+    } else if (converge) {
+      return containerData[containerId]?.lastMessage
+    } else {
+      return `#${containerId.substring(0, 6)}`
+    }
+  }
+
+  const getBorderStyle = (containerId: string) => {
+    if (containerData[containerId]?.type === 'bootstrapper') {
+      return '2px solid white';
+    }
+    return '0px';
+  }
 
   // Manage WebSocket connections
   useEffect(() => {
@@ -543,7 +556,8 @@ export default function Home() {
       </Head>
       <div className="app-container">
         <div className="sidebar sidebar1">
-          {/* Input box for Docker image name */}
+
+          <h3>Start Containers</h3>
           <div className="input-group">
             <label>
               Container Image Name:
@@ -554,40 +568,39 @@ export default function Home() {
               />
             </label>
           </div>
-
-          {/* Display the number of running containers */}
-          <p>{`Running containers: ${containers.length}`}</p>
-          <p>{`Showing ${mapType}`}</p>
-
-          <h3>Start Containers</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={handleStartBootstrap1}>Bootstrap1</button>
-            <button onClick={handleStartBootstrap2}>Bootstrap2</button>
-            <button onClick={handleStartContainer}>Container</button>
-            <button onClick={handleStartXContainers}>X Containers</button>
+          <div className="input-group">
             <label>
               <input
                 type="checkbox"
                 checked={debugContainer}
                 onChange={() => setDebugContainer(!debugContainer)}
               />
-              Start with debug
+              <span style={{ marginLeft: '5px' }}>
+                Start with debug
+              </span>
             </label>
+          </div>
+
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+            <button onClick={handleStartBootstrap1}>Bootstrap1</button>
+            <button onClick={handleStartBootstrap2}>Bootstrap2</button>
+            <button onClick={handleStartContainer}>Container</button>
+            <button onClick={() => handleStartXContainers(12)}>12 Containers</button>
           </div>
           <h3>Stop Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={() => stopXContainers(Math.floor(containers.length / 4))}>Stop Some</button>
+            <button onClick={() => stopXContainers(5)}>Stop 5</button>
             <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
           </div>
           <h3>Show</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={() => setMapType('connections')}>Connections</button>
-            <button onClick={() => setMapType('meshPeers')}>Mesh Peers</button>
-            <button onClick={() => setMapType('streams')}>Streams</button>
-            <button onClick={() => setMapType('subscribers')}>Subscribers</button>
-            <button onClick={() => setMapType('pubsubPeers')}>Pubsub Peer Store</button>
-            <button onClick={() => setMapType('libp2pPeers')}>Libp2p Peer Store</button>
-            <button onClick={() => setMapType('dhtPeers')}>DHT Known Peers</button>
+            <button onClick={() => setMapType('connections')} className={mapType === 'connections' ? 'selected' : ''}>Connections</button>
+            <button onClick={() => setMapType('meshPeers')} className={mapType === 'meshPeers' ? 'selected' : ''}>Mesh Peers</button>
+            <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>Streams</button>
+            <button onClick={() => setMapType('subscribers')} className={mapType === 'subscribers' ? 'selected' : ''}>Subscribers</button>
+            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>Pubsub Peer Store</button>
+            <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>Libp2p Peer Store</button>
+            <button onClick={() => setMapType('dhtPeers')} className={mapType === 'dhtPeers' ? 'selected' : ''}>DHT Known Peers</button>
           </div>
           {/* Conditionally render protocols when mapType is 'streams' */}
           {mapType === 'streams' && (
@@ -628,6 +641,21 @@ export default function Home() {
 
         </div>
         <div className="middle">
+          <div style={{ position: 'relative', top: '10px', left: '10px', zIndex: 10 }}>
+            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: 10 }}>
+              <h1>{mapType}</h1>
+              {/* Display total number of containers */}
+              <div>{`Total containers: ${containers.length}`}</div>
+              {/* Display the number of running containers (excludes gossip containers) */}
+              <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
+
+              {/* Display the number of running gossip containers */}
+              <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
+
+              {/* Display number of containers without mapType count */}
+              <div>{`Containers without ${mapType}: ${containers.filter((c) => containerData[c.id]?.[mapType] === undefined).length}`}</div>
+            </div>
+          </div>
           <div className="container-circle">
             <svg className="connections">
               {connections.map((conn, index) => {
@@ -749,14 +777,15 @@ export default function Home() {
                     lineHeight: `${itemSize}px`,
                     transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                     fontSize: `${fontSize}px`,
-                    backgroundColor: `${converge ? containerData[container.id]?.lastMessage : `#${container.id.substring(0, 6)}`}`,
-                    border: `${containerData[container.id]?.type === 'bootstrapper' ? '3px solid white' : '0px'}`
+                    backgroundColor: `${getBackgroundColor(container.id)}`,
+                    border: `${getBorderStyle(container.id)}`
                   }}
                   title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}\nConnections: ${connections.filter(conn => conn.from === container.id || conn.to === container.id).length}`}
                 >
                   {container.image.split(':')[0]}
                 </div>
-              );})}
+              );
+            })}
           </div>
         </div>
         <div className="sidebar sidebar2">
@@ -802,17 +831,15 @@ export default function Home() {
         }
 
         .input-group {
-          margin-bottom: 20px;
+          margin-bottom: 10px;
         }
 
         .input-group label {
-          display: flex;
           flex-direction: column;
           font-size: 16px;
         }
 
         .input-group input {
-          margin-top: 5px;
           padding: 5px;
           font-size: 16px;
         }
@@ -833,6 +860,10 @@ export default function Home() {
           padding: 5px;
           font-size: 16px;
           cursor: pointer;
+        }
+
+        .sidebar button.selected {
+          background-color: #005bb5;
         }
 
         .middle {
