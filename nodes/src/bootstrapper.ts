@@ -94,7 +94,10 @@ import { Libp2pType } from './types'
         ]
       },
       transports: [
-        tcp()
+        tcp({
+          maxConnections: 500,
+          backlog: 20,
+        })
       ],
       connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
@@ -102,7 +105,8 @@ import { Libp2pType } from './types'
       //   pubsubPeerDiscovery()
       // ],
       connectionManager: {
-        maxConnections: Infinity
+        maxConnections: 500,
+        maxIncomingPendingConnections: 20
       },
       services: {
         identify: identify(),
@@ -124,8 +128,10 @@ import { Libp2pType } from './types'
     // Create Libp2p instance
     const server: Libp2pType = await createLibp2p(libp2pConfig) as Libp2pType
 
-    // Set DHT mode and subscribe to topic
+    // Set DHT mode
     await server.services.lanDHT.setMode("server")
+
+    // Subscribe to topic
     server.services.pubsub.subscribe(topic)
 
     // Initialize StatusServer
@@ -134,7 +140,6 @@ import { Libp2pType } from './types'
 
     // Listen for pubsub messages
     server.services.pubsub.addEventListener('message', (evt) => {
-      console.log('evt.detail.topic: ', evt.detail.topic)
       if (evt.detail.topic !== topic) {
         return
       }
@@ -144,7 +149,6 @@ import { Libp2pType } from './types'
 
     console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
-    // Optionally, handle graceful shutdown
     const shutdown = async () => {
       // console.log('Shutting down Libp2p...')
       // await server.stop()

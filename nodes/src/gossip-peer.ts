@@ -20,7 +20,6 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
 
 (async () => {
   try {
-    // Initialize configuration variables
     let topic = 'pubXXX-dev'
     if (process.env.TOPIC !== undefined) {
       topic = process.env.TOPIC
@@ -88,9 +87,8 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
     // Create Libp2p instance
     const server: Libp2pType = await createLibp2p(libp2pConfig) as Libp2pType
 
-    // Subscribe to the specified topic
+    // Subscribe to topic
     server.services.pubsub.subscribe(topic)
-    console.log(`Subscribed to topic: ${topic}`)
 
     // Initialize StatusServer
     const type = 'gossip'
@@ -98,19 +96,14 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
 
     // Listen for pubsub messages
     server.services.pubsub.addEventListener('message', (evt) => {
-      console.log('evt.detail.topic: ', evt.detail.topic)
       if (evt.detail.topic !== topic) {
-        // Ignore messages on other topics
         return
       }
 
       statusServer.message = toString(evt.detail.data)
-      // You can perform additional actions with the message here
     })
 
-    // Log listening addresses
-    const listeningAddrs = server.getMultiaddrs().map((ma) => ma.toString())
-    console.log('Gossip peer listening on multiaddr(s):', listeningAddrs)
+    console.log('Gossip peerlistening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
     try {
       await server.dial(multiaddr(bootstrapper1Ma))
@@ -170,7 +163,6 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
     }, 20_000)
 
 
-    // Optionally, handle graceful shutdown
     const shutdown = async () => {
       // console.log('Shutting down Libp2p...')
       // await server.stop()

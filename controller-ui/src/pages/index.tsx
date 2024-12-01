@@ -1,71 +1,5 @@
 import Head from "next/head";
-// import dynamic from 'next/dynamic';
 import { useEffect, useRef, useState } from 'react';
-// import { GraphCanvasRef} from 'reagraph';
-//
-// const GraphCanvas = dynamic(
-//   import("reagraph").then((mod) => mod.GraphCanvas),
-//   { ssr: false }
-// );
-//
-//
-// const graphTheme = {
-//   "canvas": {
-//     "background": "#1E2026"
-//   },
-//   "node": {
-//     "fill": "#7A8C9E",
-//     "activeFill": "#1DE9AC",
-//     "opacity": 1,
-//     "selectedOpacity": 1,
-//     "inactiveOpacity": 0.2,
-//     "label": {
-//       "stroke": "#1E2026",
-//       "color": "#ACBAC7",
-//       "activeColor": "#1DE9AC"
-//     },
-//     "subLabel": {
-//       "stroke": "#1E2026",
-//       "color": "#ACBAC7",
-//       "activeColor": "#1DE9AC"
-//     }
-//   },
-//   "lasso": {
-//     "border": "1px solid #55aaff",
-//     "background": "rgba(75, 160, 255, 0.1)"
-//   },
-//   "ring": {
-//     "fill": "#54616D",
-//     "activeFill": "#1DE9AC"
-//   },
-//   "edge": {
-//     "fill": "#474B56",
-//     "activeFill": "#1DE9AC",
-//     "opacity": 1,
-//     "selectedOpacity": 1,
-//     "inactiveOpacity": 0.1,
-//     "label": {
-//       "stroke": "#1E2026",
-//       "color": "#ACBAC7",
-//       "activeColor": "#1DE9AC",
-//       "fontSize": 6
-//     }
-//   },
-//   "arrow": {
-//     "fill": "#474B56",
-//     "activeFill": "#1DE9AC"
-//   },
-//   "cluster": {
-//     "stroke": "#474B56",
-//     "opacity": 1,
-//     "selectedOpacity": 1,
-//     "inactiveOpacity": 0.1,
-//     "label": {
-//       "stroke": "#1E2026",
-//       "color": "#ACBAC7"
-//     }
-//   }
-// }
 
 interface PortMapping {
   ip: string;
@@ -129,30 +63,6 @@ export default function Home() {
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
-  // const [nodes, setNodes] = useState<any>([]);
-  // const [edges, setEdges] = useState<any>([]);
-  // const graphRef = useRef<GraphCanvasRef | null>(null);
-
-  const isEqual = (a: any, b: any) => {
-    if (a === b) return true;
-
-    if (typeof a !== "object" || typeof b !== "object" || a == null || b == null) {
-      return false;
-    }
-
-    const keysA = Object.keys(a);
-    const keysB = Object.keys(b);
-
-    if (keysA.length !== keysB.length) return false;
-
-    for (const key of keysA) {
-      if (!keysB.includes(key) || !isEqual(a[key], b[key])) return false;
-    }
-
-    return true;
-  }
-
-
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -623,52 +533,6 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [autoPublish]);
 
-  // useEffect(() => {
-  //   if (typeof window === 'undefined') {
-  //     return
-  //   }
-  //
-  //   const newNodes = containers.map(container => ({
-  //     id: container.id,
-  //     label: container.image.split(':')[0],
-  //     // Add more data as needed, e.g., color based on container type
-  //     // type: containerData[container.id]?.type || 'container',
-  //   }))
-  //
-  //   if (!isEqual(newNodes, nodes)) {
-  //     setNodes(newNodes);
-  //   }
-  //
-  //   const newEdges = connections.map((conn, index) => ({
-  //     id: `e${index}`,
-  //     source: conn.from,
-  //     target: conn.to,
-  //   }))
-  //   // Optionally, include protocol information if available
-  //   // let protocol = '';
-  //   // if (mapType === 'streams') {
-  //   //   const toPeerId = containerData[conn.to]?.peerId;
-  //   //   const fromStreams = containerData[conn.from]?.streams[toPeerId];
-  //   //
-  //   //   // if (toPeerId && fromStreams && fromStreams.length > 0) {
-  //   //   //   protocol = fromStreams[0].protocol;
-  //   //   // }
-  //   // }
-  //
-  //   if (!isEqual(newEdges, edges)) {
-  //     setEdges(newEdges)
-  //   }
-  // }, [containers, connections, containerData, mapType])
-
-  // useEffect(() => {
-  //   const g = graphRef.current
-  //   if (g === null || g === undefined) return
-  //   if (!nodes.length) return
-  //   console.log('g', g.retry())
-  //
-  //   g.fitNodesInView();
-  // }, [nodes]);
-
   return (
     <>
       <Head>
@@ -723,7 +587,7 @@ export default function Home() {
             <button onClick={() => setMapType('subscribers')}>Subscribers</button>
             <button onClick={() => setMapType('pubsubPeers')}>Pubsub Peer Store</button>
             <button onClick={() => setMapType('libp2pPeers')}>Libp2p Peer Store</button>
-            <button onClick={() => setMapType('dhtPeers')}>DHT Peer Store</button>
+            <button onClick={() => setMapType('dhtPeers')}>DHT Known Peers</button>
           </div>
           {/* Conditionally render protocols when mapType is 'streams' */}
           {mapType === 'streams' && (
@@ -764,25 +628,6 @@ export default function Home() {
 
         </div>
         <div className="middle">
-        {/*
-          <div style={{ position: "fixed", width: '1000px', height: '850px' }}>
-            {nodes.length > 0 && (
-              <GraphCanvas
-                edgeArrowPosition="none"
-                layoutType="circular2d"
-                nodes={nodes}
-                edges={edges}
-                edgeInterpolation="linear"
-                animated={false}
-                sizingType="attribute"
-                minNodeSize={2}
-                maxNodeSize={25}
-                theme={graphTheme}
-                ref={graphRef}
-              />
-            )}
-          </div>
-          */}
           <div className="container-circle">
             <svg className="connections">
               {connections.map((conn, index) => {
@@ -926,6 +771,7 @@ export default function Home() {
               <h3>Info</h3>
               <button onClick={() => stopContainer(selectedContainer)}>Kill</button>
               <div>Container ID: {selectedContainer}</div>
+              <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Outbound Connections: {connections.filter(conn => conn.from === selectedContainer).length}</div>
               <div>Inbound Connections: {connections.filter(conn => conn.to === selectedContainer).length}</div>
