@@ -138,14 +138,14 @@ import { Libp2pType } from './types'
     const type = 'bootstrapper'
     const statusServer = new StatusServer(server, type, topic)
 
-    // Listen for pubsub messages
-    server.services.pubsub.addEventListener('message', (evt) => {
-      if (evt.detail.topic !== topic) {
-        return
-      }
-
-      statusServer.message = toString(evt.detail.data)
-    })
+    // // Listen for pubsub messages
+    // server.services.pubsub.addEventListener('message', (evt) => {
+    //   if (evt.detail.topic !== topic) {
+    //     return
+    //   }
+    //
+    //   statusServer.message = toString(evt.detail.data)
+    // })
 
     console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 

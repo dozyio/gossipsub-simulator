@@ -94,14 +94,14 @@ import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2Pee
     const type = 'gossip'
     const statusServer = new StatusServer(server, type, topic)
 
-    // Listen for pubsub messages
-    server.services.pubsub.addEventListener('message', (evt) => {
-      if (evt.detail.topic !== topic) {
-        return
-      }
-
-      statusServer.message = toString(evt.detail.data)
-    })
+    // // Listen for pubsub messages
+    // server.services.pubsub.addEventListener('message', (evt) => {
+    //   if (evt.detail.topic !== topic) {
+    //     return
+    //   }
+    //
+    //   statusServer.message = toString(evt.detail.data)
+    // })
 
     console.log('Gossip peerlistening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 

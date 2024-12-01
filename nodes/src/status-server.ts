@@ -5,6 +5,7 @@ import { isEqual } from './helpers.js';
 import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
 import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
+import { toString } from 'uint8arrays'
 
 interface Stream {
   protocol: string,
@@ -81,15 +82,30 @@ export class StatusServer {
     server.addEventListener('connection:open', this.handleConnectionEvent)
     server.addEventListener('connection:close', this.handleConnectionEvent)
     server.addEventListener('connection:prune', this.handleConnectionEvent)
+    server.services.pubsub.addEventListener('message', this.handlePubsubMessageEvent)
   }
 
-  private handleConnectionEvent = async (event: CustomEvent) => {
+  private handleConnectionEvent = async (evt: CustomEvent) => {
     const connectionList = this.server.getConnections()
     const connections = connectionList.map((connection) => connection.remotePeer.toString())
 
     const update: Update = {
       connections
     }
+    await this.sendUpdate(update)
+  }
+
+  private handlePubsubMessageEvent = async (evt: CustomEvent) => {
+    if (evt.detail.topic !== this.topic) {
+      return
+    }
+
+    this.message = toString(evt.detail.data)
+
+    const update: Update = {
+      lastMessage: this.message
+    }
+
     await this.sendUpdate(update)
   }
 
@@ -104,7 +120,7 @@ export class StatusServer {
     wss.on('connection', async function connection(ws) {
       ws.on('error', console.error);
       ws.on('pong', self.heartbeat);
-      ws.on('message', function incoming(msg) {
+      ws.on('message', async function incoming(msg) {
         const newMessage = JSON.parse(msg.toString())
 
         switch (newMessage.type) {
@@ -114,8 +130,14 @@ export class StatusServer {
             break;
           case 'publish':
             self.message = newMessage.message
+            self.lastMessage = newMessage.message
+
             try {
               self.server.services.pubsub.publish(self.topic, fromString(newMessage.message))
+              const update: Update = {
+                lastMessage: newMessage.message 
+              }
+              await self.sendUpdate(update)
             } catch (e) {
               console.log(e)
             }
@@ -230,10 +252,11 @@ export class StatusServer {
       update.meshPeers = meshPeers
     }
 
-    if (this.lastMessage !== this._message) {
-      this.lastMessage = this._message
-      update.lastMessage = this.lastMessage
-    }
+    // has own handler
+    // if (this.lastMessage !== this._message) {
+    //   this.lastMessage = this._message
+    //   update.lastMessage = this.lastMessage
+    // }
 
     // dht
     // @ts-ignore-next-line

@@ -304,8 +304,6 @@ export default function Home() {
 
         s.send(JSON.stringify(message))
       }
-
-      console.log('Message published to topic');
     } catch (error) {
       console.error('Error publishing to topic:', error);
     }
@@ -446,7 +444,6 @@ export default function Home() {
           ws.onmessage = (event) => {
             try {
               const data: ContainerData = JSON.parse(event.data);
-              console.log('Received WebSocket message:', data);
               handleWebSocketMessage(container.id, data);
             } catch (error) {
               console.error(
