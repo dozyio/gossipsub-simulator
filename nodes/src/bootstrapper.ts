@@ -16,7 +16,7 @@ import { peerIdFromString } from '@libp2p/peer-id'
 import { StatusServer } from './status-server'
 import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId } from './consts'
 import { Libp2pType } from './types'
-import { defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
+import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 
 (async () => {
   try {
@@ -52,14 +52,14 @@ import { defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
       doPX: true,
       emitSelf: false,
       allowPublishToZeroTopicPeers: true, // don't throw if no peers
-      scoreParams: {
-        // IPColocationFactorWeight: 0,
-        // behaviourPenaltyWeight: 0,
+      scoreParams: createPeerScoreParams({
         appSpecificScore: applicationScore,
         topics: {
-          "`${topic}`": defaultTopicScoreParams
+          [topic]: createTopicScoreParams({
+            topicWeight: 1
+          })
         }
-      },
+      }),
       scoreThresholds: {
         gossipThreshold: -10,
         publishThreshold: -50,

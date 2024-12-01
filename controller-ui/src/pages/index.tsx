@@ -374,13 +374,7 @@ export default function Home() {
     if (clickType === 'kill') {
       stopContainer(containerId)
     } else {
-      if (selectedContainer === containerId) {
-        setSelectedContainer('')
-        return
-      }
-
       setSelectedContainer(containerId)
-      console.log('handleContainerClick', containerId)
       showContainerInfo(containerId)
     }
   }
@@ -409,8 +403,13 @@ export default function Home() {
 
   const getBorderStyle = (containerId: string) => {
     if (containerData[containerId]?.type === 'bootstrapper') {
-      return '2px solid white';
+      return '2px solid DarkBlue';
     }
+
+    if (selectedContainer === containerId) {
+      return '2px solid White';
+    }
+
     return '0px';
   }
 
@@ -896,6 +895,7 @@ export default function Home() {
           height: 800px;
           margin: 0 auto;
           overflow: hidden;
+          user-select: none;
         }
 
         .connections {

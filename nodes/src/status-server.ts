@@ -125,8 +125,12 @@ export class StatusServer {
 
         switch (newMessage.type) {
           case 'info':
-            (self.server.services.pubsub as GossipSub).score.refreshScores()
-            console.log((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())
+            const pubsubPeerList = self.server.services.pubsub.getPeers()
+            const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+            for (const peer of pubsubPeers) {
+              console.log(`${peer}: ${(self.server.services.pubsub as GossipSub).getScore(peer)}`)
+            }
+            // console.log((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())
             break;
           case 'publish':
             self.message = newMessage.message
