@@ -16,6 +16,10 @@ interface Streams {
   [key: string]: Stream[]
 }
 
+interface PeerScores {
+  [key: string]: number
+}
+
 export interface Update {
   peerId?: string,
   type?: string
@@ -31,6 +35,7 @@ export interface Update {
   topics?: string[],
   dhtPeers?: string[],
   lastMessage?: string,
+  peerScores?: PeerScores
 }
 
 export class StatusServer {
@@ -125,12 +130,18 @@ export class StatusServer {
 
         switch (newMessage.type) {
           case 'info':
+            const update: Update = {
+              peerScores: {}
+            }
             const pubsubPeerList = self.server.services.pubsub.getPeers()
             const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+
             for (const peer of pubsubPeers) {
-              console.log(`${peer}: ${(self.server.services.pubsub as GossipSub).getScore(peer)}`)
+              console.log(`Peerscore: ${peer}: ${(self.server.services.pubsub as GossipSub).getScore(peer)}`)
+              update.peerScores[peer] = (self.server.services.pubsub as GossipSub).getScore(peer)
             }
-            // console.log((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())
+
+            ws.send(JSON.stringify(update))
             break;
           case 'publish':
             self.message = newMessage.message

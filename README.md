@@ -1,6 +1,6 @@
-# Gossipsub Simulator
+# GossipSub Simulator
 
-![Gossipsub Simulator](https://github.com/dozyio/gossipsub-simulator/blob/main/docs/images/screenshot.png?raw=true "Gossipsub Simulator")
+![GossipSub Simulator](https://github.com/dozyio/gossipsub-simulator/blob/main/docs/images/screenshot.png?raw=true "GossipSub Simulator")
 
 ## Usage
 
