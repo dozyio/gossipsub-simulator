@@ -76,6 +76,7 @@ const CONTAINER_WIDTH = 800;
 const CONTAINER_HEIGHT = 800;
 
 // Force strengths
+// Compound Spring Embedder layout
 const REPULSION_FORCE = 1_000_000; // Adjusted for CSE
 const ATTRACTION_FORCE = 0.25; // Adjusted for CSE
 const COLLISION_FORCE = 500; // Adjusted for CSE
@@ -1004,6 +1005,16 @@ export default function Home() {
                           strokeWidth="2"
                         />
                       );
+
+                      // return (
+                      //   <path
+                      //     key={index}
+                      //     d={`M${fromNode.x},${fromNode.y} Q${(fromNode.x + toNode.x) / 2},${Math.min(fromNode.y, toNode.y)} ${toNode.x},${toNode.y}`}
+                      //     stroke={strokeColor}
+                      //     strokeWidth="2"
+                      //     fill="none"
+                      //   />
+                      // )
                     }
                     return null;
                   })}
