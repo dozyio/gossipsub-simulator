@@ -63,8 +63,8 @@ type MapView = 'circle' | 'graph';
 const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
 
 // Latency settings
-const LATENCY_MIN = 5;
-const LATENCY_MAX = 250;
+const LATENCY_MIN = 100;
+const LATENCY_MAX = 500;
 
 
 // Constants for force calculations
@@ -823,7 +823,7 @@ export default function Home() {
                 onChange={() => setLatencyContainer(!latencyContainer)}
               />
               <span style={{ marginLeft: '5px' }}>
-                Start with Latency
+                Start with random latency<br />({LATENCY_MIN}-{LATENCY_MAX} ms)
               </span>
             </label>
           </div>
