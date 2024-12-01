@@ -77,6 +77,20 @@ export class StatusServer {
     this.wss = new WebSocketServer({ host: '0.0.0.0', port: 80 });
     this.wssSetup(this.wss)
     this.started = true
+
+    server.addEventListener('connection:open', this.handleConnectionEvent)
+    server.addEventListener('connection:close', this.handleConnectionEvent)
+    server.addEventListener('connection:prune', this.handleConnectionEvent)
+  }
+
+  private handleConnectionEvent = async (event: CustomEvent) => {
+    const connectionList = this.server.getConnections()
+    const connections = connectionList.map((connection) => connection.remotePeer.toString())
+
+    const update: Update = {
+      connections
+    }
+    await this.sendUpdate(update)
   }
 
   private wssSetup = (wss: WebSocketServer) => {
@@ -161,12 +175,13 @@ export class StatusServer {
       update.libp2pPeers = libp2pPeers
     }
 
-    const connectionList = this.server.getConnections()
-    const connections = connectionList.map((connection) => connection.remotePeer.toString())
-    if (!isEqual(connections, this.lastConnections)) {
-      this.lastConnections = connections
-      update.connections = connections
-    }
+    // connections have own handler
+    // const connectionList = this.server.getConnections()
+    // const connections = connectionList.map((connection) => connection.remotePeer.toString())
+    // if (!isEqual(connections, this.lastConnections)) {
+    //   this.lastConnections = connections
+    //   update.connections = connections
+    // }
 
     const streams = this.getStreams()
     if (!isEqual(streams, this.lastStreams)) {
@@ -232,9 +247,7 @@ export class StatusServer {
     return update
   }
 
-  private sendUpdate = async () => {
-    const update = await this.newUpdate()
-
+  private sendUpdate = async (update: Update) => {
     if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage) {
       this.wss.clients.forEach((ws) => {
         if (ws.readyState === ws.OPEN) {
@@ -248,7 +261,8 @@ export class StatusServer {
 
   private scheduleUpdates = () => {
     const updateInterval = setInterval(async () => {
-      this.sendUpdate()
+      const update = await this.newUpdate()
+      await this.sendUpdate(update)
     }, 100)
 
     return updateInterval
