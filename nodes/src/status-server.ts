@@ -72,7 +72,7 @@ export class StatusServer {
   private started: boolean
   private scheduleUpdate!: NodeJS.Timeout
   private updateCount: number = 0
-  private maxUpdatesBeforeFullData: number = 20
+  private updatesBeforeFullData: number = 100 // 100ms * 100 = 10s
 
   constructor(server: Libp2pType, type: string, topic: string) {
     this.server = server
@@ -379,7 +379,7 @@ export class StatusServer {
     const updateInterval = setInterval(async () => {
       this.updateCount++
 
-      if (this.updateCount >= this.maxUpdatesBeforeFullData) {
+      if (this.updateCount >= this.updatesBeforeFullData) {
         this.updateCount = 0
         const update = await this.fullUpdate()
         await this.sendUpdate(update)

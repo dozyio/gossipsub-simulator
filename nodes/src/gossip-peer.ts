@@ -115,12 +115,12 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
     console.log('Gossip peerlistening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
     try {
-      await server.dial(multiaddr(bootstrapper1Ma))
+      await server.dial(multiaddr(bootstrapper1Ma), { signal: AbortSignal.timeout(10_000) })
     } catch (e) {
       console.log('Error dialing bootstrapper1 peer', e)
     }
     try {
-      await server.dial(multiaddr(bootstrapper2Ma))
+      await server.dial(multiaddr(bootstrapper2Ma), { signal: AbortSignal.timeout(10_000) })
     } catch (e) {
       console.log('Error dialing bootstrapper2 peer', e)
     }
@@ -136,7 +136,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       if (!hasBootstrapperConn) {
         try {
           console.log('dialing bootstrapper1...')
-          const bsConn = await server.dial(multiaddr(bootstrapper1Ma))
+          const bsConn = await server.dial(multiaddr(bootstrapper1Ma), { signal: AbortSignal.timeout(5_000) })
           if (!bsConn) {
             console.log('no connection')
             return
@@ -159,7 +159,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       if (!hasBootstrapperConn) {
         try {
           console.log('dialing bootstrapper2...')
-          const bsConn = await server.dial(multiaddr(bootstrapper2Ma))
+          const bsConn = await server.dial(multiaddr(bootstrapper2Ma), { signal: AbortSignal.timeout(5_000) })
           if (!bsConn) {
             console.log('no connection')
             return

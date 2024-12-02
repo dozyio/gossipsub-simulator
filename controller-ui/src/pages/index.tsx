@@ -68,8 +68,8 @@ const LATENCY_MAX = 500;
 
 
 // Constants for force calculations
-const NODE_SIZE = 30; // Fixed node size
-const MIN_DISTANCE = NODE_SIZE; // Minimum distance between nodes
+const NODE_SIZE = 20; // Fixed node size
+const MIN_DISTANCE = NODE_SIZE * 3; // Minimum distance between nodes
 
 // Container dimensions
 const CONTAINER_WIDTH = 800;
@@ -77,19 +77,28 @@ const CONTAINER_HEIGHT = 800;
 
 // Force strengths
 // Compound Spring Embedder layout
-const REPULSION_FORCE = 1_000_000; // Adjusted for CSE
-const ATTRACTION_FORCE = 0.25; // Adjusted for CSE
-const COLLISION_FORCE = 500; // Adjusted for CSE
-const GRAVITY_FORCE = 0.75; // Central gravity strength
-const DAMPING = 0.15; // Velocity damping factor
-const MAX_VELOCITY = 5; // Maximum velocity cap
-const NATURAL_LENGTH = 125; // Natural length for springs (ideal distance between connected nodes)
+const DEFAULT_FORCES = {
+  repulsion: 10_000, // Adjusted for CSE
+  attraction: 0.15, // Adjusted for CSE
+  collision: 100, // Adjusted for CSE
+  gravity: 0.05, // Central gravity strength
+  damping: 0.10, // Velocity damping factor
+  maxVelocity: 50, // Maximum velocity cap
+  naturalLength: 50, // Natural length for springs (ideal distance between connected nodes)
+}
 
-// Utility function to generate random positions within the container
-const getRandomPosition = () => ({
-  x: Math.random() * (CONTAINER_WIDTH - NODE_SIZE) + NODE_SIZE / 2,
-  y: Math.random() * (CONTAINER_HEIGHT - NODE_SIZE) + NODE_SIZE / 2,
-});
+const mapTypeForces = {
+  "pubsubPeers": DEFAULT_FORCES,
+  "meshPeers": DEFAULT_FORCES,
+  "dhtPeers": DEFAULT_FORCES,
+  "subscribers": DEFAULT_FORCES,
+  "connections": DEFAULT_FORCES,
+  "streams": DEFAULT_FORCES,
+  "libp2pPeers": {
+    ...DEFAULT_FORCES,
+    naturalLength: 250,
+  },
+}
 
 export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
@@ -109,6 +118,10 @@ export default function Home() {
   const [latencyContainer, setLatencyContainer] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [mapView, setMapView] = useState<MapView>('graph');
+  const stableCountRef = useRef(0); // Track stable state count
+  const stabilizedRef = useRef(false); // Track if graph is already stabilized
+  const intervalIdRef = useRef<number | null>(null); // Store interval ID
+  const prevConnectionsRef = useRef(connections); // Store previous connections for comparison
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -494,7 +507,7 @@ export default function Home() {
 
   const getBorderStyle = (containerId: string) => {
     if (containerData[containerId]?.type === 'bootstrapper') {
-      return '2px solid DarkBlue';
+      return '4px solid White';
     }
 
     if (selectedContainer === containerId) {
@@ -503,6 +516,12 @@ export default function Home() {
 
     return '0px';
   };
+
+  // Utility function to generate random positions within the container
+  const getRandomPosition = () => ({
+    x: Math.random() * (CONTAINER_WIDTH - NODE_SIZE) + NODE_SIZE / 2,
+    y: Math.random() * (CONTAINER_HEIGHT - NODE_SIZE) + NODE_SIZE / 2,
+  });
 
   // Manage WebSocket connections
   useEffect(() => {
@@ -648,7 +667,14 @@ export default function Home() {
       });
     });
 
-    setConnections(newConnections);
+    const connectionsHaveChanged = !areConnectionsEqual(
+      prevConnectionsRef.current,
+      newConnections
+    );
+
+    if (connectionsHaveChanged) {
+      setConnections(newConnections);
+    }
   }, [containerData, mapType]);
 
   // Fetch containers periodically
@@ -657,7 +683,7 @@ export default function Home() {
 
     const interval = setInterval(async () => {
       await fetchContainers();
-    }, 200);
+    }, 500);
     return () => clearInterval(interval);
   }, []);
 
@@ -671,22 +697,62 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [autoPublish]);
 
+  const areConnectionsEqual = (prevConnections: any[], newConnections: any[]) => {
+    if (prevConnections.length !== newConnections.length) return false;
+    return prevConnections.every(
+      (conn, index) =>
+        conn.from === newConnections[index].from &&
+        conn.to === newConnections[index].to
+    );
+  };
+
   // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
-    if (mapView !== 'graph') {
-      return
-    }
+    console.log('useEffect triggered');
+    if (mapView !== 'graph') return;
 
     const centerX = CONTAINER_WIDTH / 2;
     const centerY = CONTAINER_HEIGHT / 2;
+    const VELOCITY_THRESHOLD = 0.015; // Threshold for stability
+    const STABLE_ITERATIONS = 25; // Number of iterations required to consider stable
 
-    const interval = setInterval(() => {
+    // Compare connections to determine if they have changed
+    const connectionsHaveChanged = !areConnectionsEqual(
+      prevConnectionsRef.current,
+      connections
+    );
+
+    if (connectionsHaveChanged) {
+      console.log('Connections changed. Resetting stabilization.');
+      stableCountRef.current = 0; // Reset stability count
+      stabilizedRef.current = false; // Mark the graph as not stabilized
+      prevConnectionsRef.current = connections; // Update stored connections
+      if (intervalIdRef.current !== null) {
+        window.clearInterval(intervalIdRef.current); // Clear the existing interval
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      if (stabilizedRef.current) {
+        window.clearInterval(intervalIdRef.current!); // Stop the interval if already stabilized
+        return;
+      }
+
+      let allStable = true; // Flag to check if all nodes are stable
+
       setContainerData((prevData) => {
         const updatedData: { [id: string]: ContainerData } = { ...prevData };
 
         Object.values(updatedData).forEach((node) => {
           let fx = 0;
           let fy = 0;
+
+          // Check node stability
+          if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+            allStable = false; // Node is still moving
+            console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
+            stableCountRef.current = 0;
+          }
 
           // 1. Repulsive Forces between all node pairs
           Object.values(updatedData).forEach((otherNode) => {
@@ -699,14 +765,13 @@ export default function Home() {
             // Prevent division by zero and excessive repulsion
             distance = Math.max(distance, MIN_DISTANCE);
 
-            // Repulsive force calculation
-            const repulsion = REPULSION_FORCE / (distance * distance);
+            const repulsion = mapTypeForces[mapType].repulsion / (distance * distance);
             fx += (dx / distance) * repulsion;
             fy += (dy / distance) * repulsion;
           });
 
           // 2. Attractive Forces for connected nodes
-          connections.forEach(conn => {
+          connections.forEach((conn) => {
             if (conn.from === node.id) {
               const targetNode = updatedData[conn.to];
               if (targetNode) {
@@ -714,8 +779,7 @@ export default function Home() {
                 const dy = targetNode.y - node.y;
                 const distance = Math.sqrt(dx * dx + dy * dy) || 1;
 
-                // Attractive force calculation following spring-like behavior
-                const attraction = (distance - NATURAL_LENGTH) * ATTRACTION_FORCE;
+                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction;
                 fx += (dx / distance) * attraction;
                 fy += (dy / distance) * attraction;
               }
@@ -726,8 +790,8 @@ export default function Home() {
                 const dy = targetNode.y - node.y;
                 const distance = Math.sqrt(dx * dx + dy * dy) || 1;
 
-                // Attractive force calculation following spring-like behavior
-                const attraction = (distance - NATURAL_LENGTH) * ATTRACTION_FORCE;
+                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction;
+
                 fx += (dx / distance) * attraction;
                 fy += (dy / distance) * attraction;
               }
@@ -737,8 +801,8 @@ export default function Home() {
           // 3. Central Gravity Force
           const dxCenter = centerX - node.x;
           const dyCenter = centerY - node.y;
-          fx += dxCenter * GRAVITY_FORCE;
-          fy += dyCenter * GRAVITY_FORCE;
+          fx += dxCenter * mapTypeForces[mapType].gravity;
+          fy += dyCenter * mapTypeForces[mapType].gravity;
 
           // 4. Collision Detection and Resolution
           Object.values(updatedData).forEach((otherNode) => {
@@ -750,19 +814,19 @@ export default function Home() {
 
             if (distance < MIN_DISTANCE) {
               const overlap = MIN_DISTANCE - distance;
-              const collision = (overlap / distance) * COLLISION_FORCE;
+              const collision = (overlap / distance) * mapTypeForces[mapType].collision;
               fx += (dx / distance) * collision;
               fy += (dy / distance) * collision;
             }
           });
 
           // 5. Update Velocities with Damping
-          node.vx = (node.vx + fx) * DAMPING;
-          node.vy = (node.vy + fy) * DAMPING;
+          node.vx = (node.vx + fx) * mapTypeForces[mapType].damping;
+          node.vy = (node.vy + fy) * mapTypeForces[mapType].damping;
 
           // 6. Cap Velocities to Prevent Overshooting
-          node.vx = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, node.vx));
-          node.vy = Math.max(-MAX_VELOCITY, Math.min(MAX_VELOCITY, node.vy));
+          node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx));
+          node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy));
 
           // 7. Update Positions
           node.x += node.vx;
@@ -775,10 +839,31 @@ export default function Home() {
 
         return updatedData;
       });
+      // Update stability state
+      if (allStable) {
+        stableCountRef.current += 1;
+        console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
+        if (stableCountRef.current >= STABLE_ITERATIONS) {
+          console.log('Graph has stabilized.');
+          stabilizedRef.current = true; // Mark the graph as stabilized
+          window.clearInterval(intervalIdRef.current!); // Stop the interval
+        }
+      } else {
+        if (stableCountRef.current > 0) {
+          console.log('Graph became unstable again. Resetting stable count.');
+        }
+        stableCountRef.current = 0; // Reset stability count if instability is detected
+      }
     }, 30); // Update every 30ms for smooth animation
 
-    return () => clearInterval(interval); // Cleanup on unmount
-  }, [connections, mapView]);
+    intervalIdRef.current = interval; // Store the interval ID for cleanup
+
+    return () => {
+      if (intervalIdRef.current !== null) {
+        window.clearInterval(intervalIdRef.current); // Ensure interval is cleared on unmount
+      }
+    };
+  }, [connections, mapView, mapType]);
 
   return (
     <>
@@ -896,8 +981,22 @@ export default function Home() {
             <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
             <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
-
-            <div>{`Containers without ${mapType}: ${containers.filter((c) => containerData[c.id]?.[mapType] === undefined).length}`}</div>
+            <div>
+              {`Containers without ${mapType}: ${containers.filter((c) => {
+                const data = containerData[c.id]?.[mapType];
+                if (Array.isArray(data)) {
+                  return data.length === 0;
+                } else if (typeof data === 'object' && data !== null) {
+                  return Object.keys(data).length === 0;
+                }
+                // If data is neither an array nor an object, consider it as no connection
+                return true;
+              }).length
+                }`}
+            </div>
+            <div>
+              {`Total connections: ${connections.length}`}
+            </div>
           </div>
           <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
             <h6 style={{ marginBottom: '10px' }}>View:</h6>
@@ -1003,13 +1102,14 @@ export default function Home() {
                           y2={toNode.y}
                           stroke={strokeColor}
                           strokeWidth="2"
+                          opacity={0.8}
                         />
                       );
 
                       // return (
                       //   <path
                       //     key={index}
-                      //     d={`M${fromNode.x},${fromNode.y} Q${(fromNode.x + toNode.x) / 2},${Math.min(fromNode.y, toNode.y)} ${toNode.x},${toNode.y}`}
+                      //     d={`M${fromNode.x},${fromNode.y} Q${(fromNode.x + toNode.x) / 2},${Math.min(fromNode.y, toNode.y) - 10} ${toNode.x},${toNode.y}`}
                       //     stroke={strokeColor}
                       //     strokeWidth="2"
                       //     fill="none"
@@ -1043,7 +1143,7 @@ export default function Home() {
                         border: `${getBorderStyle(container.id)}`,
                         position: 'absolute',
                         transform: `translate(-50%, -50%)`, // Center the node
-                        transition: 'left 0.1s, top 0.1s, background-color 0.3s, border 0.3s', // Smooth transitions
+                        transition: 'background-color 0.2s, border 0.1s', // Smooth transitions
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -1325,7 +1425,7 @@ export default function Home() {
           text-align: center;
           cursor: pointer;
           transform-origin: 50% 50%;
-          transition: left 0.1s, top 0.1s, background-color 0.3s, border 0.3s; /* Smooth transitions */
+          transition: left 0.1s, top 0.1s, background-color 0.2s, border 0.1s;
           overflow: hidden;
           white-space: nowrap;
           text-overflow: ellipsis;
