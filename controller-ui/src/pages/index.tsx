@@ -178,6 +178,7 @@ export default function Home() {
             type: '',
             lastMessage: '',
             peerScores: {},
+            rtts: {},
             x,
             y,
             vx: 0,
@@ -463,6 +464,66 @@ export default function Home() {
     }
   };
 
+  const getLabel = (containerId: string): string => {
+    const container = containers.find((c) => c.id === containerId);
+    const node = containerData[containerId];
+
+    if (!container || !node) {
+      return '';
+    }
+
+    let label = container.image.split(':')[0];
+
+    // Determine the source of interaction: Hovered or Selected
+    const sourceContainerId = hoveredContainerId || selectedContainer;
+
+    if (sourceContainerId) {
+      const sourceData = containerData[sourceContainerId];
+      if (sourceData) {
+        let relatedPeerIds: string[] = [];
+        let relatedContainerIds: string[] = [];
+
+        // Determine related peers/containers based on mapType
+        if (mapType === 'streams') {
+          relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
+        } else if (
+          mapType === 'connections' ||
+          mapType === 'pubsubPeers' ||
+          mapType === 'meshPeers' ||
+          mapType === 'libp2pPeers' ||
+          mapType === 'dhtPeers'
+        ) {
+          relatedPeerIds = sourceData[mapType]; // Peer IDs
+        }
+
+        // Map peer IDs to container IDs if necessary
+        if (relatedPeerIds.length > 0) {
+          relatedContainerIds = Object.keys(containerData).filter(
+            (id) => relatedPeerIds.includes(containerData[id]?.peerId)
+          );
+        }
+
+        // Check if the current container is related
+        if (relatedContainerIds.includes(container.id)) {
+          const peerId = node.peerId;
+          if (hoverType === 'peerscore') {
+            const score = sourceData?.peerScores[peerId];
+            if (score !== undefined) {
+              label = String(score); // Use peerScore for label
+            }
+          } else if (hoverType === 'rtt') {
+            const rtt = sourceData?.rtts[peerId];
+            if (rtt !== undefined) {
+              label = String(rtt); // Use rtt for label
+            }
+          }
+        }
+      }
+    }
+
+    return label
+  }
+
   const handleClickType = () => {
     if (clickType === 'kill') {
       setClickType('info');
@@ -527,6 +588,15 @@ export default function Home() {
     x: Math.random() * (CONTAINER_WIDTH - nodeSize) + nodeSize / 2,
     y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
   });
+
+  const areConnectionsEqual = (prevConnections: any[], newConnections: any[]) => {
+    if (prevConnections.length !== newConnections.length) return false;
+    return prevConnections.every(
+      (conn, index) =>
+        conn.from === newConnections[index].from &&
+        conn.to === newConnections[index].to
+    );
+  };
 
   // Manage WebSocket connections
   useEffect(() => {
@@ -702,14 +772,48 @@ export default function Home() {
     return () => clearInterval(interval);
   }, [autoPublish]);
 
-  const areConnectionsEqual = (prevConnections: any[], newConnections: any[]) => {
-    if (prevConnections.length !== newConnections.length) return false;
-    return prevConnections.every(
-      (conn, index) =>
-        conn.from === newConnections[index].from &&
-        conn.to === newConnections[index].to
+  // Update node size based on number of containers
+  useEffect(() => {
+    const minSize = 30; // Minimum node size
+    const maxSize = 40; // Maximum node size
+    const scalingFactor = 5; // Adjust this to control sensitivity
+
+    if (containers.length === 0) {
+      setNodeSize(maxSize); // Default size when no containers
+      return;
+    }
+
+    // Dynamically scale the node size
+    const size = Math.max(
+      minSize,
+      Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor)
     );
-  };
+
+    setNodeSize(size);
+  }, [containers]);
+
+  // Update min distance
+  useEffect(() => {
+    const minDistanceMin = nodeSize * 2; // Minimum allowable distance
+    const minDistanceMax = nodeSize * 4; // Maximum allowable distance
+    const scalingFactor = 1; // Adjust for sensitivity
+
+    if (containers.length === 0) {
+      setMinDistance(minDistanceMax); // Default when no containers
+      return;
+    }
+
+    // Dynamically scale the minDistance
+    const distance = Math.max(
+      minDistanceMin,
+      Math.min(
+        minDistanceMax,
+        minDistanceMax - Math.log(containers.length) * scalingFactor
+      )
+    );
+
+    setMinDistance(distance);
+  }, [containers, nodeSize]);
 
   // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
@@ -1168,16 +1272,6 @@ export default function Home() {
                           opacity={opacity}
                         />
                       );
-
-                      // return (
-                      //   <path
-                      //     key={index}
-                      //     d={`M${fromNode.x},${fromNode.y} Q${(fromNode.x + toNode.x) / 2},${Math.min(fromNode.y, toNode.y) - 10} ${toNode.x},${toNode.y}`}
-                      //     stroke={strokeColor}
-                      //     strokeWidth="2"
-                      //     fill="none"
-                      //   />
-                      // )
                     }
                     return null;
                   })}
@@ -1186,55 +1280,6 @@ export default function Home() {
                 {containers.map((container) => {
                   const node = containerData[container.id];
                   if (!node) return null; // Ensure node data exists
-
-                  // Initialize label with container's name
-                  let label = container.image.split(':')[0];
-                  // Determine the source of interaction: Hovered or Selected
-                  const sourceContainerId = hoveredContainerId || selectedContainer;
-
-                  if (sourceContainerId) {
-                    const sourceData = containerData[sourceContainerId];
-                    if (sourceData) {
-                      let relatedPeerIds: string[] = [];
-                      let relatedContainerIds: string[] = [];
-
-                      // Determine related peers/containers based on mapType
-                      if (mapType === 'streams') {
-                        relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
-                      } else if (
-                        mapType === 'connections' ||
-                        mapType === 'pubsubPeers' ||
-                        mapType === 'meshPeers' ||
-                        mapType === 'libp2pPeers' ||
-                        mapType === 'dhtPeers'
-                      ) {
-                        relatedPeerIds = sourceData[mapType]; // Peer IDs
-                      }
-
-                      // Map peer IDs to container IDs if necessary
-                      if (relatedPeerIds.length > 0) {
-                        relatedContainerIds = Object.keys(containerData).filter(
-                          (id) => relatedPeerIds.includes(containerData[id]?.peerId)
-                        );
-                      }
-
-                      // Check if the current container is related
-                      if (relatedContainerIds.includes(container.id)) {
-                        const peerId = node.peerId;
-                        if (hoverType === 'peerscore') {
-                          const score = sourceData?.peerScores[peerId];
-                          if (score !== undefined) {
-                            label = String(score); // Use peerScore for label
-                          }
-                        } else if (hoverType === 'rtt') {
-                          const rtt = sourceData?.rtts[peerId];
-                          if (rtt !== undefined) {
-                            label = String(rtt); // Use rtt for label
-                          }
-                        }
-                      }
-                    }
-                  }
 
                   return (
                     <div
@@ -1259,7 +1304,7 @@ export default function Home() {
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
-                      {label}
+                      {getLabel(container.id)}
                     </div>
                   );
                 })}
@@ -1395,7 +1440,7 @@ export default function Home() {
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
-                      {container.image.split(':')[0]}
+                      {getLabel(container.id)}
                     </div>
                   );
                 })}
