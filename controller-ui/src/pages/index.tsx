@@ -32,6 +32,11 @@ interface PeerScores {
   [peerId: string]: number;
 }
 
+// round trip times
+interface RRTs {
+  [peerId: string]: number;
+}
+
 interface ContainerData {
   id: string; // Unique identifier
   peerId: string;
@@ -48,6 +53,7 @@ interface ContainerData {
   type: string;
   lastMessage: string;
   peerScores: PeerScores;
+  rtts: RRTs;
   x: number; // Position X
   y: number; // Position Y
   vx: number; // Velocity X
@@ -57,6 +63,8 @@ interface ContainerData {
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
 
 type ClickType = 'kill' | 'info';
+
+type HoverType = 'peerscore' | 'rtt';
 
 type MapView = 'circle' | 'graph';
 
@@ -100,8 +108,9 @@ export default function Home() {
   const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
   const [mapType, setMapType] = useState<MapType>('connections');
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
-  const [converge, setConverge] = useState<boolean>(false);
+  const [converge, setConverge] = useState<boolean>(true);
   const [clickType, setClickType] = useState<ClickType>('info');
+  const [hoverType, setHoverType] = useState<HoverType>('rtt');
   const [autoPublish, setAutoPublish] = useState<boolean>(false);
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
@@ -116,8 +125,8 @@ export default function Home() {
   const [gossipD, setGossipD] = useState<string>('8');
   const [gossipDlo, setGossipDlo] = useState<string>('6');
   const [gossipDhi, setGossipDhi] = useState<string>('12');
-  const [minLatency, setMinLatency] = useState<string>('0');
-  const [maxLatency, setMaxLatency] = useState<string>('0');
+  const [minLatency, setMinLatency] = useState<string>('20');
+  const [maxLatency, setMaxLatency] = useState<string>('300');
   const [nodeSize, setNodeSize] = useState<number>(35);
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
 
@@ -403,7 +412,7 @@ export default function Home() {
   };
 
   const publishToPeer = async (containerId: string, amount = 1) => {
-    setConverge(true);
+    // setConverge(false);
 
     try {
       const s = containerSockets.current[containerId];
@@ -459,6 +468,14 @@ export default function Home() {
       setClickType('info');
     } else {
       setClickType('kill');
+    }
+  };
+
+  const handleHoverType = () => {
+    if (hoverType === 'peerscore') {
+      setHoverType('rtt');
+    } else {
+      setHoverType('peerscore');
     }
   };
 
@@ -830,9 +847,9 @@ export default function Home() {
       // Update stability state
       if (allStable) {
         stableCountRef.current += 1;
-        console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
+        // console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
         if (stableCountRef.current >= STABLE_ITERATIONS) {
-          console.log('Graph has stabilized.');
+          // console.log('Graph has stabilized.');
           stabilizedRef.current = true; // Mark the graph as stabilized
           window.clearInterval(intervalIdRef.current!); // Stop the interval
         }
@@ -909,7 +926,7 @@ export default function Home() {
                   <input
                     value={minLatency}
                     onChange={(e) => setMinLatency(e.target.value)}
-                    style={{ width: '2em' }}
+                    style={{ width: '4em' }}
                   />
                 </label>
               </div>
@@ -919,7 +936,7 @@ export default function Home() {
                   <input
                     value={maxLatency}
                     onChange={(e) => setMaxLatency(e.target.value)}
-                    style={{ width: '2em' }}
+                    style={{ width: '4em' }}
                   />
                 </label>
               </div>
@@ -1182,11 +1199,10 @@ export default function Home() {
                       let relatedContainerIds: string[] = [];
 
                       // Determine related peers/containers based on mapType
-                      if (mapType === 'connections') {
-                        relatedContainerIds = sourceData.connections; // Direct connections (container IDs)
-                      } else if (mapType === 'streams') {
+                      if (mapType === 'streams') {
                         relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
                       } else if (
+                        mapType === 'connections' ||
                         mapType === 'pubsubPeers' ||
                         mapType === 'meshPeers' ||
                         mapType === 'libp2pPeers' ||
@@ -1205,9 +1221,16 @@ export default function Home() {
                       // Check if the current container is related
                       if (relatedContainerIds.includes(container.id)) {
                         const peerId = node.peerId;
-                        const score = sourceData.peerScores[peerId];
-                        if (score !== undefined) {
-                          label = String(score); // Use peerScore for label
+                        if (hoverType === 'peerscore') {
+                          const score = sourceData?.peerScores[peerId];
+                          if (score !== undefined) {
+                            label = String(score); // Use peerScore for label
+                          }
+                        } else if (hoverType === 'rtt') {
+                          const rtt = sourceData?.rtts[peerId];
+                          if (rtt !== undefined) {
+                            label = String(rtt); // Use rtt for label
+                          }
                         }
                       }
                     }
@@ -1385,10 +1408,11 @@ export default function Home() {
         <div className="sidebar sidebar2">
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
+          <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
+          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           <button onClick={() => publishToTopic(1)}>Publish to random peer</button>
           <button onClick={() => publishToTopic(1000)}>Publish 1k to random peers</button>
-          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           {selectedContainer && containerData[selectedContainer] && (
             <div>
               <h3>Peer Info</h3>

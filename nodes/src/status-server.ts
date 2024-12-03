@@ -20,6 +20,10 @@ interface PeerScores {
   [key: string]: number
 }
 
+interface RTTs {
+  [key: string]: number
+}
+
 export interface Update {
   peerId?: string,
   type?: string
@@ -35,7 +39,8 @@ export interface Update {
   topics?: string[],
   dhtPeers?: string[],
   lastMessage?: string,
-  peerScores?: PeerScores
+  peerScores?: PeerScores,
+  rtts?: RTTs
 }
 
 export class StatusServer {
@@ -54,6 +59,7 @@ export class StatusServer {
   private lastProtocols: string[] = []
   private lastStreams: Streams = {}
   private lastMultiaddrs: string[] = []
+  private lastRTTs: RTTs = {} // round trip times
 
   // pubsub
   private lastTopics: string[] = []
@@ -73,7 +79,9 @@ export class StatusServer {
   private started: boolean
   private scheduleUpdate!: NodeJS.Timeout
   private updateCount: number = 0
-  private updatesBeforeFullData: number = 100 // 100ms * 100 = 10s
+  private updateIntervalMs: number = 100
+  private updatesBeforeFullData: number = 100 // (this.updateIntervalMs * 100) // 10s
+  private rttUpdateIntervalMs: number = 1000
 
   constructor(server: Libp2pType, type: string, topic: string) {
     this.server = server
@@ -86,12 +94,14 @@ export class StatusServer {
 
     this.wss = new WebSocketServer({ host: '0.0.0.0', port: 80 });
     this.wssSetup(this.wss)
-    this.started = true
 
     server.addEventListener('connection:open', this.handleConnectionEvent)
     server.addEventListener('connection:close', this.handleConnectionEvent)
     server.addEventListener('connection:prune', this.handleConnectionEvent)
     server.services.pubsub.addEventListener('message', this.handlePubsubMessageEvent)
+
+    this.rttSetup()
+    this.started = true
   }
 
   private handleConnectionEvent = async (evt: CustomEvent) => {
@@ -285,6 +295,12 @@ export class StatusServer {
       update.peerScores = peerScores
     }
 
+    const rtts = this.getRTTs()
+    if (!isEqual(rtts, this.lastRTTs)) {
+      this.lastRTTs = rtts
+      update.rtts =rtts 
+    }
+
     // messages have own handler
     // if (this.lastMessage !== this._message) {
     //   this.lastMessage = this._message
@@ -365,6 +381,9 @@ export class StatusServer {
     this.lastPeerScores = this.getPeerScores()
     update.peerScores = this.lastPeerScores
 
+    this.lastRTTs = this.getRTTs()
+    update.rtts = this.lastRTTs
+
     this.lastMessage = this._message
     update.lastMessage = this.lastMessage
 
@@ -402,13 +421,31 @@ export class StatusServer {
         const update = await this.newUpdate()
         await this.sendUpdate(update)
       }
-    }, 100)
+    }, this.updateIntervalMs)
 
     return updateInterval
   }
 
   private heartbeat = () => {
     this.wssAlive = true;
+  }
+
+  private getRTTs = (): RTTs=> {
+    const rtts: RTTs = {}
+
+    for (const conns of this.server.getConnections()) {
+      rtts[conns.remotePeer.toString()] = conns.rtt ?? -1
+    }
+
+    return rtts
+  }
+
+  private rttSetup = () => {
+    const self = this
+
+    setInterval(async () => {
+      self.lastRTTs = self.getRTTs()
+    }, this.rttUpdateIntervalMs)
   }
 
   private getStreams = (): Streams => {
