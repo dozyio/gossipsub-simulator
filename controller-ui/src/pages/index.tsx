@@ -62,15 +62,6 @@ type MapView = 'circle' | 'graph';
 
 const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
 
-// Latency settings
-const LATENCY_MIN = 100;
-const LATENCY_MAX = 500;
-
-
-// Constants for force calculations
-const NODE_SIZE = 20; // Fixed node size
-const MIN_DISTANCE = NODE_SIZE * 3; // Minimum distance between nodes
-
 // Container dimensions
 const CONTAINER_WIDTH = 800;
 const CONTAINER_HEIGHT = 800;
@@ -78,7 +69,7 @@ const CONTAINER_HEIGHT = 800;
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 10_000, // Adjusted for CSE
+  repulsion: 100_000, // Adjusted for CSE
   attraction: 0.15, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
@@ -122,6 +113,13 @@ export default function Home() {
   const stabilizedRef = useRef(false); // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null); // Store interval ID
   const prevConnectionsRef = useRef(connections); // Store previous connections for comparison
+  const [gossipD, setGossipD] = useState<string>('8');
+  const [gossipDlo, setGossipDlo] = useState<string>('6');
+  const [gossipDhi, setGossipDhi] = useState<string>('12');
+  const [minLatency, setMinLatency] = useState<string>('0');
+  const [maxLatency, setMaxLatency] = useState<string>('0');
+  const [nodeSize, setNodeSize] = useState<number>(35);
+  const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
 
   // Function to fetch containers from the backend
   const fetchContainers = async () => {
@@ -212,68 +210,59 @@ export default function Home() {
     }
   };
 
-  const handleStartBootstrap1 = async () => {
-    // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
-    const env = [
-      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
-    ];
-
+  const envSetter = (env: string[]): string[] => {
     if (debugContainer) {
       env.push(DEBUG_STRING);
     }
 
     if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
+      if (minLatency !== '0' && maxLatency !== '0') {
+        env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`);
+      }
     }
+
+    env.push(`GOSSIP_D=${gossipD}`);
+    env.push(`GOSSIP_DLO=${gossipDlo}`);
+    env.push(`GOSSIP_DHI=${gossipDhi}`);
+
+    return env
+  }
+
+  const handleStartBootstrap1 = async () => {
+    // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
+    let env = [
+      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
+    ];
+
+    env = envSetter(env)
 
     await startContainer('bootstrapper:dev', env, "bootstrapper1");
   };
 
   const handleStartBootstrap2 = async () => {
     // 12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw
-    const env = [
+    let env = [
       'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
     ];
 
-    if (debugContainer) {
-      env.push(DEBUG_STRING);
-    }
-
-    if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
-    }
+    env = envSetter(env)
 
     await startContainer('bootstrapper:dev', env, "bootstrapper2");
   };
 
   // Function to start a new container
   const handleStartContainer = async () => {
-    const env = [];
-
-    if (debugContainer) {
-      env.push(DEBUG_STRING);
-    }
-
-    if (latencyContainer) {
-      env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
-    }
+    const env = envSetter([]);
 
     await startContainer(imageName, env);
   };
 
   const handleStartXContainers = async (amount = 12) => {
-    const env = [];
-
-    if (debugContainer) {
-      env.push(DEBUG_STRING);
-    }
 
     try {
       const promises = [];
       for (let i = 0; i < amount; i++) {
-        if (latencyContainer) {
-          env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (LATENCY_MAX - LATENCY_MIN)) + LATENCY_MIN}ms`);
-        }
+        const env = envSetter([]);
 
         promises.push(
           startContainer(imageName, env)
@@ -383,7 +372,7 @@ export default function Home() {
   };
 
   const publishToTopic = async (amount = 1000) => {
-    setConverge(true);
+    // setConverge(true);
 
     try {
       // Extract all WebSocket instances, filtering out nulls
@@ -436,7 +425,6 @@ export default function Home() {
   };
 
   const showContainerInfo = (containerId: string) => {
-    console.log('Checking containerData for:', containerId);
     console.log('Current containerData:', containerData);
 
     const data = containerData[containerId];
@@ -519,8 +507,8 @@ export default function Home() {
 
   // Utility function to generate random positions within the container
   const getRandomPosition = () => ({
-    x: Math.random() * (CONTAINER_WIDTH - NODE_SIZE) + NODE_SIZE / 2,
-    y: Math.random() * (CONTAINER_HEIGHT - NODE_SIZE) + NODE_SIZE / 2,
+    x: Math.random() * (CONTAINER_WIDTH - nodeSize) + nodeSize / 2,
+    y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
   });
 
   // Manage WebSocket connections
@@ -763,7 +751,7 @@ export default function Home() {
             let distance = Math.sqrt(dx * dx + dy * dy) || 1;
 
             // Prevent division by zero and excessive repulsion
-            distance = Math.max(distance, MIN_DISTANCE);
+            distance = Math.max(distance, minDistance);
 
             const repulsion = mapTypeForces[mapType].repulsion / (distance * distance);
             fx += (dx / distance) * repulsion;
@@ -812,8 +800,8 @@ export default function Home() {
             const dy = node.y - otherNode.y;
             const distance = Math.sqrt(dx * dx + dy * dy) || 1;
 
-            if (distance < MIN_DISTANCE) {
-              const overlap = MIN_DISTANCE - distance;
+            if (distance < minDistance) {
+              const overlap = minDistance - distance;
               const collision = (overlap / distance) * mapTypeForces[mapType].collision;
               fx += (dx / distance) * collision;
               fy += (dy / distance) * collision;
@@ -833,8 +821,8 @@ export default function Home() {
           node.y += node.vy;
 
           // 8. Boundary Enforcement: Keep Nodes Within Container
-          node.x = Math.max(NODE_SIZE / 2, Math.min(CONTAINER_WIDTH - NODE_SIZE / 2, node.x));
-          node.y = Math.max(NODE_SIZE / 2, Math.min(CONTAINER_HEIGHT - NODE_SIZE / 2, node.y));
+          node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x));
+          node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y));
         });
 
         return updatedData;
@@ -908,9 +896,66 @@ export default function Home() {
                 onChange={() => setLatencyContainer(!latencyContainer)}
               />
               <span style={{ marginLeft: '5px' }}>
-                Start with random latency<br />({LATENCY_MIN}-{LATENCY_MAX} ms)
+                Start with latency
               </span>
             </label>
+          </div>
+          {latencyContainer && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+
+              <div className="input-group">
+                <label>
+                  Min
+                  <input
+                    value={minLatency}
+                    onChange={(e) => setMinLatency(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+              <div className="input-group">
+                <label>
+                  Max
+                  <input
+                    value={maxLatency}
+                    onChange={(e) => setMaxLatency(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+            <div className="input-group">
+              <label>
+                D
+                <input
+                  value={gossipD}
+                  onChange={(e) => setGossipD(e.target.value)}
+                  style={{ width: '2em' }}
+                />
+              </label>
+            </div>
+            <div className="input-group">
+              <label>
+                Dlo
+                <input
+                  value={gossipDlo}
+                  onChange={(e) => setGossipDlo(e.target.value)}
+                  style={{ width: '2em' }}
+                />
+              </label>
+            </div>
+            <div className="input-group">
+              <label>
+                Dhi
+                <input
+                  value={gossipDhi}
+                  onChange={(e) => setGossipDhi(e.target.value)}
+                  style={{ width: '2em' }}
+                />
+              </label>
+            </div>
           </div>
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -921,8 +966,8 @@ export default function Home() {
           </div>
           <h3>Stop Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={() => stopXContainers(5)}>Stop 5</button>
-            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
+            <button onClick={() => stopXContainers(5)} className="short">Stop 5</button>
+            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }} className="short">Stop All</button>
           </div>
           <h3>Show</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -993,9 +1038,6 @@ export default function Home() {
                 return true;
               }).length
                 }`}
-            </div>
-            <div>
-              {`Total connections: ${connections.length}`}
             </div>
           </div>
           <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
@@ -1075,6 +1117,8 @@ export default function Home() {
 
                       // Determine the stroke color based on the protocol
                       let strokeColor = '#ffffff'; // Default color
+                      let strokeWidth = 2; // Default strokeWidth
+                      let opacity = 0.8; // Default opacity
 
                       if (connectionProtocol) {
                         // Define a color mapping based on protocol
@@ -1091,6 +1135,8 @@ export default function Home() {
                       }
                       if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
                         strokeColor = '#ffffff';
+                        strokeWidth = 4;
+                        opacity = 1;
                       }
 
                       return (
@@ -1101,8 +1147,8 @@ export default function Home() {
                           x2={toNode.x}
                           y2={toNode.y}
                           stroke={strokeColor}
-                          strokeWidth="2"
-                          opacity={0.8}
+                          strokeWidth={strokeWidth}
+                          opacity={opacity}
                         />
                       );
 
@@ -1124,6 +1170,49 @@ export default function Home() {
                   const node = containerData[container.id];
                   if (!node) return null; // Ensure node data exists
 
+                  // Initialize label with container's name
+                  let label = container.image.split(':')[0];
+                  // Determine the source of interaction: Hovered or Selected
+                  const sourceContainerId = hoveredContainerId || selectedContainer;
+
+                  if (sourceContainerId) {
+                    const sourceData = containerData[sourceContainerId];
+                    if (sourceData) {
+                      let relatedPeerIds: string[] = [];
+                      let relatedContainerIds: string[] = [];
+
+                      // Determine related peers/containers based on mapType
+                      if (mapType === 'connections') {
+                        relatedContainerIds = sourceData.connections; // Direct connections (container IDs)
+                      } else if (mapType === 'streams') {
+                        relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
+                      } else if (
+                        mapType === 'pubsubPeers' ||
+                        mapType === 'meshPeers' ||
+                        mapType === 'libp2pPeers' ||
+                        mapType === 'dhtPeers'
+                      ) {
+                        relatedPeerIds = sourceData[mapType]; // Peer IDs
+                      }
+
+                      // Map peer IDs to container IDs if necessary
+                      if (relatedPeerIds.length > 0) {
+                        relatedContainerIds = Object.keys(containerData).filter(
+                          (id) => relatedPeerIds.includes(containerData[id]?.peerId)
+                        );
+                      }
+
+                      // Check if the current container is related
+                      if (relatedContainerIds.includes(container.id)) {
+                        const peerId = node.peerId;
+                        const score = sourceData.peerScores[peerId];
+                        if (score !== undefined) {
+                          label = String(score); // Use peerScore for label
+                        }
+                      }
+                    }
+                  }
+
                   return (
                     <div
                       key={container.id}
@@ -1133,12 +1222,12 @@ export default function Home() {
                       onMouseEnter={() => setHoveredContainerId(container.id)}
                       onMouseLeave={() => setHoveredContainerId(null)}
                       style={{
-                        width: `${NODE_SIZE}px`,
-                        height: `${NODE_SIZE}px`,
-                        lineHeight: `${NODE_SIZE}px`,
+                        width: `${nodeSize}px`,
+                        height: `${nodeSize}px`,
+                        lineHeight: `${nodeSize}px`,
                         left: `${node.x}px`,
                         top: `${node.y}px`,
-                        fontSize: `${Math.max(8, NODE_SIZE / 3)}px`,
+                        fontSize: `${Math.max(8, nodeSize / 3)}px`,
                         backgroundColor: `${getBackgroundColor(container.id)}`,
                         border: `${getBorderStyle(container.id)}`,
                         position: 'absolute',
@@ -1147,7 +1236,7 @@ export default function Home() {
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
-                      {container.image.split(':')[0]}
+                      {label}
                     </div>
                   );
                 })}
@@ -1300,7 +1389,7 @@ export default function Home() {
           <button onClick={() => publishToTopic(1)}>Publish to random peer</button>
           <button onClick={() => publishToTopic(1000)}>Publish 1k to random peers</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
-          {selectedContainer && (
+          {selectedContainer && containerData[selectedContainer] && (
             <div>
               <h3>Peer Info</h3>
 
@@ -1381,6 +1470,10 @@ export default function Home() {
           border-radius: 4px;
           background-color: #0070f3;
           color: white;
+        }
+
+        .sidebar button.short {
+          width: inherit;
         }
 
         .sidebar button:hover {

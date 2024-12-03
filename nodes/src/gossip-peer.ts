@@ -31,6 +31,21 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       dhtPrefix = process.env.DHTPREFIX
     }
 
+    let D = 8
+    if (process.env.GOSSIP_D !== undefined) {
+      D = parseInt(process.env.GOSSIP_D)
+    }
+
+    let DLO = 6
+    if (process.env.GOSSIP_DLO !== undefined) {
+      DLO = parseInt(process.env.GOSSIP_DLO)
+    }
+
+    let DHI = 12
+    if (process.env.GOSSIP_DHI !== undefined) {
+      DHI = parseInt(process.env.GOSSIP_DHI)
+    }
+
     // Configure Libp2p
     const libp2pConfig = {
       addresses: {
@@ -58,9 +73,9 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
         identify: identify(),
         ping: ping(),
         pubsub: gossipsub({
-          D: 8,
-          Dlo: 6,
-          Dhi: 10,
+          D: D,
+          Dlo: DLO,
+          Dhi: DHI,
           doPX: false,
           emitSelf: false,
           allowPublishToZeroTopicPeers: true, // don't throw if no peers

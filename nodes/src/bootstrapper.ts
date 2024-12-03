@@ -40,15 +40,30 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       dhtPrefix = process.env.DHTPREFIX
     }
 
+    let D = 8
+    if (process.env.GOSSIP_D !== undefined) {
+      D = parseInt(process.env.GOSSIP_D)
+    }
+
+    let DLO = 6
+    if (process.env.GOSSIP_DLO !== undefined) {
+      DLO = parseInt(process.env.GOSSIP_DLO)
+    }
+
+    let DHI = 12
+    if (process.env.GOSSIP_DHI !== undefined) {
+      DHI = parseInt(process.env.GOSSIP_DHI)
+    }
+
     // Generate key pair
     const pKey: Ed25519PrivateKey = await generateKeyPair(seed)
 
     // Configure Gossipsub
     const gossipsubConfig: Partial<GossipsubOpts> = {
       enabled: true,
-      D: 8,
-      Dlo: 6,
-      Dhi: 12,
+      D: D,
+      Dlo: DLO,
+      Dhi: DHI,
       doPX: true,
       emitSelf: false,
       allowPublishToZeroTopicPeers: true, // don't throw if no peers
@@ -100,7 +115,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       transports: [
         tcp({
           maxConnections: 500,
-          backlog: 20,
+          backlog: 30,
         })
       ],
       connectionEncrypters: [noise()],
@@ -110,7 +125,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       // ],
       connectionManager: {
         maxConnections: 500,
-        maxIncomingPendingConnections: 20
+        maxIncomingPendingConnections: 30,
       },
       services: {
         identify: identify(),

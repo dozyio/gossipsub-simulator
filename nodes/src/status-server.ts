@@ -61,6 +61,7 @@ export class StatusServer {
   private lastPubsubPeers: string[] = []
   private lastMeshPeers: string[] = []
   private lastMessage: string = ''
+  private lastPeerScores: PeerScores = {}
   private _message: string = ''
 
   // dht
@@ -117,6 +118,19 @@ export class StatusServer {
     await this.sendUpdate(update)
   }
 
+  private getPeerScores = (): PeerScores => {
+    const pubsubPeerList = this.server.services.pubsub.getPeers()
+    const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+
+    let peerScores: PeerScores = {}
+    for (const peer of pubsubPeers) {
+      // console.log(`Peerscore: ${peer}: ${(this.server.services.pubsub as GossipSub).getScore(peer)}`)
+      peerScores[peer] = (this.server.services.pubsub as GossipSub).getScore(peer)
+    }
+
+    return peerScores
+  }
+
   private wssSetup = (wss: WebSocketServer) => {
     const self = this
 
@@ -135,16 +149,9 @@ export class StatusServer {
           case 'info':
             console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
 
-            const update: Update = {
-              peerScores: {}
-            }
-            const pubsubPeerList = self.server.services.pubsub.getPeers()
-            const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
-
-            for (const peer of pubsubPeers) {
-              console.log(`Peerscore: ${peer}: ${(self.server.services.pubsub as GossipSub).getScore(peer)}`)
-              update.peerScores[peer] = (self.server.services.pubsub as GossipSub).getScore(peer)
-            }
+            const update: Partial<Update> = {}
+            self.lastPeerScores = self.getPeerScores()
+            update.peerScores = self.lastPeerScores
 
             ws.send(JSON.stringify(update))
             break;
@@ -272,6 +279,12 @@ export class StatusServer {
       update.meshPeers = meshPeers
     }
 
+    const peerScores = this.getPeerScores()
+    if (!isEqual(peerScores, this.lastPeerScores)) {
+      this.lastPeerScores = peerScores
+      update.peerScores = peerScores
+    }
+
     // messages have own handler
     // if (this.lastMessage !== this._message) {
     //   this.lastMessage = this._message
@@ -349,6 +362,9 @@ export class StatusServer {
     this.lastMeshPeers = meshPeers
     update.meshPeers = meshPeers
 
+    this.lastPeerScores = this.getPeerScores()
+    update.peerScores = this.lastPeerScores
+
     this.lastMessage = this._message
     update.lastMessage = this.lastMessage
 
@@ -362,9 +378,8 @@ export class StatusServer {
     return update
   }
 
-
   private sendUpdate = async (update: Update) => {
-    if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage) {
+    if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores) {
       this.wss.clients.forEach((ws) => {
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify(update));
