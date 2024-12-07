@@ -6,7 +6,7 @@ build:
 	cd nodes && make build
 
 ui:
-	cd controller-ui && yarn dev
+	cd controller-ui && npm run dev
 
 net:
 	docker network create -d bridge --subnet=172.20.0.0/16 --opt com.docker.network.bridge.name=tc-network ${NETWORK} || true

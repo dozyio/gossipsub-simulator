@@ -11,7 +11,7 @@ import { createLibp2p } from 'libp2p'
 import { toString } from 'uint8arrays'
 import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
 import { ping } from '@libp2p/ping'
-import { applicationScore } from './helpers'
+import { applicationScore, removePublicAddressesLoopbackAddressesMapper } from './helpers'
 import { Libp2pType } from './types'
 import { StatusServer } from './status-server'
 import { peerIdFromString } from '@libp2p/peer-id'
@@ -46,6 +46,11 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       DHI = parseInt(process.env.GOSSIP_DHI)
     }
 
+    let DOUT = 2
+    if (process.env.GOSSIP_DOUT !== undefined) {
+      DOUT = parseInt(process.env.GOSSIP_DOUT)
+    }
+
     // Configure Libp2p
     const libp2pConfig = {
       addresses: {
@@ -76,6 +81,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
           D: D,
           Dlo: DLO,
           Dhi: DHI,
+          Dout: DOUT,
           doPX: false,
           emitSelf: false,
           allowPublishToZeroTopicPeers: true, // don't throw if no peers
@@ -97,13 +103,13 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
             publishThreshold: -50,
             graylistThreshold: -80,
             acceptPXThreshold: 100,
-            opportunisticGraftThreshold: 5,
+            // opportunisticGraftThreshold: 5,
           }
         }),
         lanDHT: kadDHT({
           protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
           clientMode: true,
-          peerInfoMapper: removePublicAddressesMapper,
+          peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
         }),
       }
     }

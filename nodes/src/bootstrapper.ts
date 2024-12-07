@@ -40,19 +40,27 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       dhtPrefix = process.env.DHTPREFIX
     }
 
-    let D = 8
+    // Recommend setting D settings to 0 for bootstrapper
+    // https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#recommendations-for-network-operators
+
+    let D = 0
     if (process.env.GOSSIP_D !== undefined) {
       D = parseInt(process.env.GOSSIP_D)
     }
 
-    let DLO = 6
+    let DLO = 0
     if (process.env.GOSSIP_DLO !== undefined) {
       DLO = parseInt(process.env.GOSSIP_DLO)
     }
 
-    let DHI = 12
+    let DHI = 0
     if (process.env.GOSSIP_DHI !== undefined) {
       DHI = parseInt(process.env.GOSSIP_DHI)
+    }
+
+    let DOUT = 0
+    if (process.env.GOSSIP_DOUT !== undefined) {
+      DOUT = parseInt(process.env.GOSSIP_DOUT)
     }
 
     // Generate key pair
@@ -64,6 +72,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       D: D,
       Dlo: DLO,
       Dhi: DHI,
+      Dout: DOUT,
       doPX: true,
       emitSelf: false,
       allowPublishToZeroTopicPeers: true, // don't throw if no peers

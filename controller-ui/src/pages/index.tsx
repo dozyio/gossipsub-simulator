@@ -115,16 +115,18 @@ export default function Home() {
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
-  const [latencyContainer, setLatencyContainer] = useState<boolean>(false);
+  const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [mapView, setMapView] = useState<MapView>('graph');
   const stableCountRef = useRef(0); // Track stable state count
   const stabilizedRef = useRef(false); // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null); // Store interval ID
   const prevConnectionsRef = useRef(connections); // Store previous connections for comparison
+  const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false);
   const [gossipD, setGossipD] = useState<string>('8');
   const [gossipDlo, setGossipDlo] = useState<string>('6');
   const [gossipDhi, setGossipDhi] = useState<string>('12');
+  const [gossipDout, setGossipDout] = useState<string>('2');
   const [minLatency, setMinLatency] = useState<string>('20');
   const [maxLatency, setMaxLatency] = useState<string>('300');
   const [nodeSize, setNodeSize] = useState<number>(35);
@@ -220,20 +222,32 @@ export default function Home() {
     }
   };
 
-  const envSetter = (env: string[]): string[] => {
+  const envSetter = (env: string[], isBootstrap: boolean = false): string[] => {
     if (debugContainer) {
       env.push(DEBUG_STRING);
     }
 
-    if (latencyContainer) {
+    if (hasLatencySettings) {
       if (minLatency !== '0' && maxLatency !== '0') {
         env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`);
       }
     }
 
-    env.push(`GOSSIP_D=${gossipD}`);
-    env.push(`GOSSIP_DLO=${gossipDlo}`);
-    env.push(`GOSSIP_DHI=${gossipDhi}`);
+    if (isBootstrap) {
+      // https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#recommendations-for-network-operators
+      // D=D_lo=D_hi=D_out=0
+      env.push(`GOSSIP_D=0`);
+      env.push(`GOSSIP_DLO=0`);
+      env.push(`GOSSIP_DHI=0`);
+      env.push(`GOSSIP_DOUT=0`);
+    } else {
+      if (hasGossipDSettings) {
+        env.push(`GOSSIP_D=${gossipD}`);
+        env.push(`GOSSIP_DLO=${gossipDlo}`);
+        env.push(`GOSSIP_DHI=${gossipDhi}`);
+        env.push(`GOSSIP_DOUT=${gossipDout}`);
+      }
+    }
 
     return env
   }
@@ -244,7 +258,7 @@ export default function Home() {
       'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
     ];
 
-    env = envSetter(env)
+    env = envSetter(env, true)
 
     await startContainer('bootstrapper:dev', env, "bootstrapper1");
   };
@@ -255,7 +269,7 @@ export default function Home() {
       'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
     ];
 
-    env = envSetter(env)
+    env = envSetter(env, true)
 
     await startContainer('bootstrapper:dev', env, "bootstrapper2");
   };
@@ -1013,15 +1027,15 @@ export default function Home() {
             <label>
               <input
                 type="checkbox"
-                checked={latencyContainer}
-                onChange={() => setLatencyContainer(!latencyContainer)}
+                checked={hasLatencySettings}
+                onChange={() => setHasLatencySettings(!hasLatencySettings)}
               />
               <span style={{ marginLeft: '5px' }}>
                 Start with latency
               </span>
             </label>
           </div>
-          {latencyContainer && (
+          {hasLatencySettings && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
 
               <div className="input-group">
@@ -1046,38 +1060,62 @@ export default function Home() {
               </div>
             </div>
           )}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <div className="input-group">
-              <label>
-                D
-                <input
-                  value={gossipD}
-                  onChange={(e) => setGossipD(e.target.value)}
-                  style={{ width: '2em' }}
-                />
-              </label>
-            </div>
-            <div className="input-group">
-              <label>
-                Dlo
-                <input
-                  value={gossipDlo}
-                  onChange={(e) => setGossipDlo(e.target.value)}
-                  style={{ width: '2em' }}
-                />
-              </label>
-            </div>
-            <div className="input-group">
-              <label>
-                Dhi
-                <input
-                  value={gossipDhi}
-                  onChange={(e) => setGossipDhi(e.target.value)}
-                  style={{ width: '2em' }}
-                />
-              </label>
-            </div>
+          <div className="input-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={hasGossipDSettings}
+                onChange={() => setHasGossipDSettings(!hasGossipDSettings)}
+              />
+              <span style={{ marginLeft: '5px' }}>
+                Gossip D Settings (not bootstrappers)
+              </span>
+            </label>
           </div>
+          {hasGossipDSettings && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+              <div className="input-group">
+                <label>
+                  D
+                  <input
+                    value={gossipD}
+                    onChange={(e) => setGossipD(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+              <div className="input-group">
+                <label>
+                  Dlo
+                  <input
+                    value={gossipDlo}
+                    onChange={(e) => setGossipDlo(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+              <div className="input-group">
+                <label>
+                  Dhi
+                  <input
+                    value={gossipDhi}
+                    onChange={(e) => setGossipDhi(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+              <div className="input-group">
+                <label>
+                  Dout
+                  <input
+                    value={gossipDout}
+                    onChange={(e) => setGossipDout(e.target.value)}
+                    style={{ width: '2em' }}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
             <button onClick={handleStartBootstrap1}>Bootstrap1</button>
