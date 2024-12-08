@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
@@ -366,10 +367,81 @@ func createAndStartContainer(imageName, containerName string, containerPort int,
 		hostPort, _ = strconv.Atoi(portInfo[0].HostPort)
 	}
 
+	// fmt.Printf("Setting container ID: %s", containerJSON.ID[:12])
+	err = setContainerID(hostPort, containerJSON.ID[:12])
+	if err != nil {
+		fmt.Printf("failed to set container id: %s, %s - stopping container", containerJSON.ID[:12], err)
+		err = stopContainer(resp.ID)
+		if err != nil {
+			fmt.Printf("failed to stop container id: %s", containerJSON.ID[:12])
+			return "", 0, err
+		}
+	}
+
 	// Broadcast after creation/start
 	go broadcastContainers()
 
 	return resp.ID, hostPort, nil
+}
+
+func setContainerID(hostPort int, containerID string) error {
+	const maxRetries = 5
+	const retryDelay = time.Second
+
+	var lastErr error
+	for i := 1; i <= maxRetries; i++ {
+		err := setContainerIDViaWebSocket(hostPort, containerID)
+		if err == nil {
+			return nil // Success on this attempt
+		}
+		lastErr = err
+		fmt.Printf("Attempt %d/%d failed to set container ID: %v\n", i, maxRetries, err)
+
+		if i < maxRetries {
+			time.Sleep(retryDelay)
+		}
+	}
+
+	return fmt.Errorf("all retries failed: %w", lastErr)
+}
+
+func setContainerIDViaWebSocket(hostPort int, containerID string) error {
+	url := fmt.Sprintf("ws://localhost:%d", hostPort)
+	c, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	// container sends details on new connection, ignore
+	_, _, err = c.ReadMessage()
+	if err != nil {
+		return err
+	}
+
+	msg := map[string]string{
+		"type":    "set-id",
+		"message": containerID,
+	}
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		return err
+	}
+
+	// Optionally, read a response if the container sends one
+	_, resp, err := c.ReadMessage()
+	if err != nil {
+		return err
+	} else {
+		fmt.Printf("Received response from container: %s\n", string(resp))
+	}
+
+	return nil
 }
 
 func startLogStreaming(containerID string) {

@@ -25,6 +25,7 @@ interface RTTs {
 }
 
 export interface Update {
+  containerId?: string
   peerId?: string,
   type?: string
   topic?: string
@@ -49,11 +50,12 @@ export class StatusServer {
   private type: string
   private peerId: PeerId
   private topic: string
+  private containerId: string = ''
 
   // libp2p
-  private lastPeerId = ''
-  private lastType = ''
-  private lastTopic = ''
+  private lastPeerId: string = ''
+  private lastType: string = ''
+  private lastTopic: string  = ''
   private lastLibp2pPeers: string[] = []
   private lastConnections: string[] = []
   private lastProtocols: string[] = []
@@ -72,7 +74,6 @@ export class StatusServer {
 
   // dht
   private lastDhtPeers: string[] = []
-
 
   private wss: WebSocketServer
   private wssAlive: boolean
@@ -157,6 +158,11 @@ export class StatusServer {
         const newMessage = JSON.parse(msg.toString())
 
         switch (newMessage.type) {
+          case 'set-id':
+            console.log('setting container id', newMessage.message)
+            self.containerId = newMessage.message
+            ws.send(JSON.stringify({ status: "ok" }))
+            break
           case 'info':
             console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
 
@@ -206,7 +212,9 @@ export class StatusServer {
   }
 
   private newUpdate = async (): Promise<Update> => {
-    const update: Update = {}
+    const update: Update = {
+      containerId: this.containerId
+    }
 
     // libp2p
     const peerId = this.peerId.toString()
@@ -299,7 +307,7 @@ export class StatusServer {
     const rtts = this.getRTTs()
     if (!isEqual(rtts, this.lastRTTs)) {
       this.lastRTTs = rtts
-      update.rtts =rtts 
+      update.rtts = rtts
     }
 
     // messages have own handler
@@ -321,7 +329,9 @@ export class StatusServer {
   }
 
   private fullUpdate = async (): Promise<Update> => {
-    const update: Update = {}
+    const update: Update = {
+      containerId: this.containerId
+    }
 
     // libp2p
     const peerId = this.peerId.toString()
@@ -431,7 +441,7 @@ export class StatusServer {
     this.wssAlive = true;
   }
 
-  private getRTTs = (): RTTs=> {
+  private getRTTs = (): RTTs => {
     const rtts: RTTs = {}
 
     for (const conns of this.server.getConnections()) {
