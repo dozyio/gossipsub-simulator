@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 
-import { gossipsub } from '@chainsafe/libp2p-gossipsub'
+import { GossipSub, gossipsub } from '@chainsafe/libp2p-gossipsub'
 import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 import { identify } from '@libp2p/identify'
@@ -128,15 +128,6 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
     const type = 'gossip'
     const statusServer = new StatusServer(server, type, topic)
 
-    // // Listen for pubsub messages
-    // server.services.pubsub.addEventListener('message', (evt) => {
-    //   if (evt.detail.topic !== topic) {
-    //     return
-    //   }
-    //
-    //   statusServer.message = toString(evt.detail.data)
-    // })
-
     console.log('Gossip peerlistening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
     try {
@@ -150,8 +141,12 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       console.log('Error dialing bootstrapper2 peer', e)
     }
 
-    // reconnect to bootstrapper 1 - refresh peers
+    // refresh peers via bootstrapper 1
     setInterval(async () => {
+      if ((server.services.pubsub as GossipSub).getMeshPeers.length >= (server.services.pubsub as GossipSub).opts.D) {
+        return
+      }
+
       let hasBootstrapperConn = false
 
       server.getConnections(peerIdFromString(bootstrapper1PeerId)).forEach(conn => {
@@ -173,8 +168,11 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       }
     }, 20_000)
 
-    // reconnect to bootstrapper 2 - refresh peers
+    // refresh peers via bootstrapper 2
     setInterval(async () => {
+      if ((server.services.pubsub as GossipSub).getMeshPeers.length >= (server.services.pubsub as GossipSub).opts.D) {
+        return
+      }
       let hasBootstrapperConn = false
 
       server.getConnections(peerIdFromString(bootstrapper2PeerId)).forEach(conn => {

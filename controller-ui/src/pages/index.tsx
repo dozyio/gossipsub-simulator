@@ -3,6 +3,7 @@ import { FaCircleNodes } from "react-icons/fa6";
 import { FaRegCircle } from "react-icons/fa";
 import { useEffect, useRef, useState } from 'react';
 
+
 interface PortMapping {
   ip: string;
   private_port: number;
@@ -38,12 +39,14 @@ interface RRTs {
 }
 
 interface ContainerData {
+  containerId: string
   id: string; // Unique identifier
   peerId: string;
   pubsubPeers: string[];
   subscribers: string[];
   libp2pPeers: string[];
   meshPeers: string[];
+  fanoutList: Map<string, Set<string>>
   dhtPeers: string[];
   connections: string[]; // IDs of connected containers
   protocols: string[];
@@ -68,6 +71,8 @@ type HoverType = 'peerscore' | 'rtt';
 
 type MapView = 'circle' | 'graph';
 
+const ENDPOINT = "http://localhost:8080"
+const WS_ENDPOINT = "ws://localhost:8080/ws"
 const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
 
 // Container dimensions
@@ -100,13 +105,12 @@ const mapTypeForces = {
 }
 
 export default function Home() {
+  // peer stuff
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [imageName, setImageName] = useState<string>('gossip:dev');
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
-  const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
-  const containerSockets = useRef<{ [id: string]: WebSocket | null }>({});
-  const [connections, setConnections] = useState<{ from: string; to: string }[]>([]);
-  const [mapType, setMapType] = useState<MapType>('connections');
+
+  // ui config
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
   const [converge, setConverge] = useState<boolean>(true);
   const [clickType, setClickType] = useState<ClickType>('info');
@@ -114,43 +118,32 @@ export default function Home() {
   const [autoPublish, setAutoPublish] = useState<boolean>(false);
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
-  const [debugContainer, setDebugContainer] = useState<boolean>(false);
-  const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
-  const [mapView, setMapView] = useState<MapView>('graph');
-  const stableCountRef = useRef(0); // Track stable state count
-  const stabilizedRef = useRef(false); // Track if graph is already stabilized
-  const intervalIdRef = useRef<number | null>(null); // Store interval ID
-  const prevConnectionsRef = useRef(connections); // Store previous connections for comparison
+
+  // network config
+  const [debugContainer, setDebugContainer] = useState<boolean>(false);
   const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false);
   const [gossipD, setGossipD] = useState<string>('8');
   const [gossipDlo, setGossipDlo] = useState<string>('6');
   const [gossipDhi, setGossipDhi] = useState<string>('12');
   const [gossipDout, setGossipDout] = useState<string>('2');
+  const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false);
   const [minLatency, setMinLatency] = useState<string>('20');
   const [maxLatency, setMaxLatency] = useState<string>('300');
+  const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false);
+  const [packetLoss, setPacketLoss] = useState<string>('10');
+
+  // graph stuff
+  const [edges, setEdges] = useState<{ from: string; to: string }[]>([]);
+  const prevEdgesRef = useRef(edges); // Store previous connections for comparison
+  const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
+  const [mapType, setMapType] = useState<MapType>('connections');
+  const [mapView, setMapView] = useState<MapView>('graph');
+  const stableCountRef = useRef(0); // Track stable state count
+  const stabilizedRef = useRef(false); // Track if graph is already stabilized
+  const intervalIdRef = useRef<number | null>(null); // Store interval ID
   const [nodeSize, setNodeSize] = useState<number>(35);
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
-
-  // const fetchContainers = async () => {
-  //   try {
-  //     const response = await fetch('http://localhost:8080/containers');
-  //     if (!response.ok) {
-  //       throw new Error(`Error fetching containers: ${response.statusText}`);
-  //     }
-  //     const data: ContainerInfo[] = await response.json();
-  //     const runningContainers = data.filter((c) => c.state === 'running');
-  //     setContainers(runningContainers);
-  //
-  //     // Initialize container data with positions and velocities
-  //     initializeContainerData(runningContainers);
-  //   } catch (error) {
-  //     console.error('Error fetching containers:', error);
-  //     setContainers([]);
-  //     setContainerData({});
-  //     setConnections([]);
-  //   }
-  // };
 
   const initializeContainerData = (runningContainers: ContainerInfo[]) => {
     setContainerData((prevData) => {
@@ -164,12 +157,14 @@ export default function Home() {
           // Initialize data for new containers
           const { x, y } = getRandomPosition();
           newData[container.id] = {
+            containerId: container.id,
             id: container.id,
             peerId: '',
             pubsubPeers: [],
             subscribers: [],
             libp2pPeers: [],
             meshPeers: [],
+            fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
             connections: [], // Will be updated via WebSocket
             protocols: [],
@@ -194,7 +189,7 @@ export default function Home() {
 
   const startContainer = async (image: string, env: string[], hostname: string = ""): Promise<ContainerInfo | void> => {
     try {
-      const response = await fetch('http://localhost:8080/containers/create', {
+      const response = await fetch(`${ENDPOINT}/containers/create`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -226,10 +221,22 @@ export default function Home() {
       env.push(DEBUG_STRING);
     }
 
-    if (hasLatencySettings) {
-      if (minLatency !== '0' && maxLatency !== '0') {
-        env.push(`NETWORK_CONFIG=delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`);
+    if (hasLatencySettings || hasPacketLossSetting) {
+      let str = "NETWORK_CONFIG="
+
+      if (hasLatencySettings && minLatency !== '0' && maxLatency !== '0') {
+        str = `${str}delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`;
       }
+
+      if (hasLatencySettings && minLatency !== '0' && maxLatency !== '0' && hasPacketLossSetting && packetLoss !== '0') {
+        str = `${str} `
+      }
+
+      if (hasPacketLossSetting && packetLoss !== '0') {
+        str = `${str}loss=${packetLoss}%`
+      }
+
+      env.push(str)
     }
 
     if (isBootstrap) {
@@ -300,7 +307,7 @@ export default function Home() {
 
   const stopContainer = async (containerID: string) => {
     try {
-      const response = await fetch('http://localhost:8080/containers/stop', {
+      const response = await fetch(`${ENDPOINT}/containers/stop`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -324,7 +331,7 @@ export default function Home() {
 
   const stopAllContainers = async () => {
     try {
-      const response = await fetch('http://localhost:8080/containers/stopall', {
+      const response = await fetch(`${ENDPOINT}/containers/stopall`, {
         method: 'POST',
       });
 
@@ -360,7 +367,7 @@ export default function Home() {
           continue;
         }
 
-        const response = await fetch('http://localhost:8080/containers/stop', {
+        const response = await fetch(`${ENDPOINT}/containers/stop`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -383,65 +390,45 @@ export default function Home() {
     // No need to fetchContainers here, WebSocket updates container list
   };
 
-  const getRandomColor = () => {
-    const letters = '0123456789ABCDEF';
-    let color = '#';
-    for (let i = 0; i < 6; i++) {
-      color += letters[Math.floor(Math.random() * 16)];
-    }
-    return color;
-  };
+  // const getRandomColor = () => {
+  //   const letters = '0123456789ABCDEF';
+  //   let color = '#';
+  //   for (let i = 0; i < 6; i++) {
+  //     color += letters[Math.floor(Math.random() * 16)];
+  //   }
+  //   return color;
+  // };
 
-  const publishToTopic = async (amount = 1000) => {
-    // setConverge(true);
+  const publishToTopic = async (containerId: string = '', amount = 1) => {
+    interface Body {
+      amount: number
+      containerId?: string
+
+    }
+    const body: Body = {
+      amount: amount
+    }
+
+    if (containerId !== '') {
+      body.containerId = containerId
+    }
 
     try {
-      // Extract all WebSocket instances, filtering out nulls
-      const sockets = Object.values(containerSockets.current).filter(
-        (socket): socket is WebSocket => socket !== null
-      );
+      const response = await fetch(`${ENDPOINT}/publish`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body)
+      });
 
-      if (sockets.length === 0) {
-        // console.warn('No active WebSocket connections available.');
-        return null;
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error publishing: ${errorText}`);
       }
 
-      for (let i = 0; i < amount; i++) {
-        const randomIndex = Math.floor(Math.random() * sockets.length);
-
-        const s = sockets[randomIndex];
-
-        const message = {
-          type: 'publish',
-          message: getRandomColor()
-        };
-
-        s.send(JSON.stringify(message));
-      }
     } catch (error) {
-      console.error('Error publishing to topic:', error);
-    }
-  };
-
-  const publishToPeer = async (containerId: string, amount = 1) => {
-    // setConverge(false);
-
-    try {
-      const s = containerSockets.current[containerId];
-      if (!s) {
-        console.log('No WebSocket connection available for container ID');
-        return;
-      }
-      for (let i = 0; i < amount; i++) {
-        const message = {
-          type: 'publish',
-          message: getRandomColor()
-        };
-
-        s.send(JSON.stringify(message));
-      }
-    } catch (error) {
-      console.error('Error publishing to topic:', error);
+      console.error('Error publishing:', error);
     }
   };
 
@@ -454,25 +441,25 @@ export default function Home() {
     } else {
       console.log(`No data available for container ID ${containerId}`);
     }
-    try {
-      // Extract the WebSocket instance
-      const s = containerSockets.current[containerId];
-
-      if (!s) {
-        throw new Error('No WebSocket connection available for container ID');
-      }
-
-      const message = {
-        type: 'info',
-        message: ''
-      };
-
-      s.send(JSON.stringify(message));
-
-      console.log('Info message sent to container');
-    } catch (error) {
-      console.error('Error sending info message:', error);
-    }
+    // try {
+    //   // Extract the WebSocket instance
+    //   const s = containerSockets.current[containerId];
+    //
+    //   if (!s) {
+    //     throw new Error('No WebSocket connection available for container ID');
+    //   }
+    //
+    //   const message = {
+    //     type: 'info',
+    //     message: ''
+    //   };
+    //
+    //   s.send(JSON.stringify(message));
+    //
+    //   console.log('Info message sent to container');
+    // } catch (error) {
+    //   console.error('Error sending info message:', error);
+    // }
   };
 
   const getLabel = (containerId: string): string => {
@@ -516,18 +503,18 @@ export default function Home() {
 
         // Check if the current container is related
         // if (relatedContainerIds.includes(container.id)) {
-          const peerId = node.peerId;
-          if (hoverType === 'peerscore') {
-            const score = sourceData?.peerScores[peerId];
-            if (score !== undefined) {
-              label = String(score); // Use peerScore for label
-            }
-          } else if (hoverType === 'rtt') {
-            const rtt = sourceData?.rtts[peerId];
-            if (rtt !== undefined) {
-              label = String(rtt); // Use rtt for label
-            }
+        const peerId = node.peerId;
+        if (hoverType === 'peerscore') {
+          const score = sourceData?.peerScores[peerId];
+          if (score !== undefined) {
+            label = String(score); // Use peerScore for label
           }
+        } else if (hoverType === 'rtt') {
+          const rtt = sourceData?.rtts[peerId];
+          if (rtt !== undefined) {
+            label = String(rtt); // Use rtt for label
+          }
+        }
         // }
       }
     }
@@ -555,8 +542,13 @@ export default function Home() {
     if (clickType === 'kill') {
       stopContainer(containerId);
     } else {
-      setSelectedContainer(containerId);
-      showContainerInfo(containerId);
+      if (selectedContainer == containerId) {
+        setSelectedContainer('');
+        showContainerInfo('');
+      } else {
+        setSelectedContainer(containerId);
+        showContainerInfo(containerId);
+      }
     }
   };
 
@@ -600,7 +592,7 @@ export default function Home() {
     y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
   });
 
-  const areConnectionsEqual = (prevConnections: any[], newConnections: any[]) => {
+  const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
     if (prevConnections.length !== newConnections.length) return false;
     return prevConnections.every(
       (conn, index) =>
@@ -609,97 +601,52 @@ export default function Home() {
     );
   };
 
-  function createContainerWebSocket(
-    container: ContainerInfo,
-    handleWebSocketMessage: (containerId: string, data: ContainerData) => void
-  ): WebSocket | null {
-    const portMapping = container.ports.find(
-      (port) => port.private_port === 80 && port.type === 'tcp'
-    );
+  // Function to handle WebSocket messages and update containerData
+  const handleWebSocketMessage = (data: ContainerData) => {
+    setContainerData((prevData) => {
+      const existing = prevData[data.containerId];
+      if (!existing) return prevData; // If container is not in the data, skip
 
-    if (!portMapping || !portMapping.public_port) {
-      return null;
-    }
+      // Merge new data with existing containerData while preserving positions and velocities
+      return {
+        ...prevData,
+        [data.containerId]: {
+          ...existing,
+          ...data, // Merge new data
+          x: existing.x,
+          y: existing.y,
+          vx: existing.vx,
+          vy: existing.vy,
+        },
+      };
+    });
 
-    // console.log('got port mapping', portMapping)
-
-    const wsUrl = `ws://localhost:${portMapping.public_port}/`;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onopen = () => {
-      console.log(`WebSocket connected for container ${container.id}`);
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data: ContainerData = JSON.parse(event.data);
-        handleWebSocketMessage(container.id, data);
-      } catch (error) {
-        console.error(
-          `Error parsing WebSocket message from container ${container.id}:`,
-          error
-        );
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error(`WebSocket error for container ${container.id}:`, error);
-    };
-
-    ws.onclose = () => {
-      console.log(`WebSocket closed for container ${container.id}`);
-      containerSockets.current[container.id] = null;
-    };
-
-    return ws;
-  }
-
-    // Function to handle WebSocket messages and update containerData
-    const handleWebSocketMessage = (containerId: string, data: ContainerData) => {
-      setContainerData((prevData) => {
-        const existing = prevData[containerId];
-        if (!existing) return prevData; // If container is not in the data, skip
-
-        // Merge new data with existing containerData while preserving positions and velocities
-        return {
-          ...prevData,
-          [containerId]: {
-            ...existing,
-            ...data, // Merge new data
-            x: existing.x,
-            y: existing.y,
-            vx: existing.vx,
-            vy: existing.vy,
-          },
-        };
+    // Extract protocols from streams
+    if (data.streams) {
+      const newProtocols = new Set<string>();
+      Object.values(data.streams).forEach((streamsArray) => {
+        streamsArray.forEach((stream) => {
+          newProtocols.add(stream.protocol);
+        });
       });
 
-      // Extract protocols from streams
-      if (data.streams) {
-        const newProtocols = new Set<string>();
-        Object.values(data.streams).forEach((streamsArray) => {
-          streamsArray.forEach((stream) => {
-            newProtocols.add(stream.protocol);
-          });
+      // Update the protocols state with new unique protocols
+      setProtocols((prevProtocols) => {
+        const updatedProtocols = [...prevProtocols];
+        newProtocols.forEach((protocol) => {
+          if (!updatedProtocols.includes(protocol)) {
+            updatedProtocols.push(protocol);
+          }
         });
+        return updatedProtocols;
+      });
+    }
+  };
 
-        // Update the protocols state with new unique protocols
-        setProtocols((prevProtocols) => {
-          const updatedProtocols = [...prevProtocols];
-          newProtocols.forEach((protocol) => {
-            if (!updatedProtocols.includes(protocol)) {
-              updatedProtocols.push(protocol);
-            }
-          });
-          return updatedProtocols;
-        });
-      }
-    };
-
-  // WebSocket for container list updates from controller
-  // Receives containers list
+  // WebSocket for controller
+  // Receives containers list and node updates
   useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8080/ws");
+    const ws = new WebSocket(WS_ENDPOINT);
 
     ws.onopen = () => {
       console.log("Main WebSocket connected - receiving container updates.");
@@ -708,15 +655,21 @@ export default function Home() {
     ws.onmessage = (event) => {
       try {
         const json = JSON.parse(event.data)
-        if (json.type !== 'containerList') {
-          console.log('unknown type', json.type)
-          return
+        switch (json.mType) {
+          case "containerList":
+            const updatedContainers: ContainerInfo[] = json.data;
+            const runningContainers = updatedContainers.filter((c) => c.state === 'running');
+            setContainers(runningContainers);
+            initializeContainerData(runningContainers);
+            break
+          case "nodeStatus":
+            handleWebSocketMessage(json)
+            break
+          default:
+            console.log('unknown type', json.type)
+            return
         }
 
-        const updatedContainers: ContainerInfo[] = json.data;
-        const runningContainers = updatedContainers.filter((c) => c.state === 'running');
-        setContainers(runningContainers);
-        initializeContainerData(runningContainers);
       } catch (error) {
         console.error("Error parsing containers from main WebSocket:", error);
       }
@@ -735,48 +688,9 @@ export default function Home() {
     };
   }, []);
 
-  // Manage WebSocket connections for individual containers
-  useEffect(() => {
-  containers.forEach((container) => {
-    if (!containerSockets.current[container.id]) {
-      const ws = createContainerWebSocket(container, handleWebSocketMessage);
-      if (ws) {
-        containerSockets.current[container.id] = ws;
-      }
-    }
-  });
-    // Clean up WebSocket connections for containers that no longer exist
-    Object.keys(containerSockets.current).forEach((containerId) => {
-      if (!containers.find((c) => c.id === containerId)) {
-        // Container no longer exists, close the WebSocket
-        const ws = containerSockets.current[containerId];
-        if (ws) {
-          console.log('Closing WebSocket for container', containerId);
-          ws.close();
-        }
-        containerSockets.current[containerId] = null;
-      }
-    });
-  }, [containers]);
-
-useEffect(() => {
-  const interval = setInterval(() => {
-    containers.forEach((container) => {
-      if (!containerSockets.current[container.id]) {
-        const ws = createContainerWebSocket(container, handleWebSocketMessage);
-        if (ws) {
-          containerSockets.current[container.id] = ws;
-        }
-      }
-    });
-  }, 5000);
-
-  return () => clearInterval(interval);
-}, [containers]);
-
   // Update connections based on current containerData and mapType
   useEffect(() => {
-    const newConnections: { from: string; to: string }[] = [];
+    const newEdges: { from: string; to: string }[] = [];
 
     Object.keys(containerData).forEach((containerId) => {
       const data = containerData[containerId];
@@ -803,26 +717,26 @@ useEffect(() => {
 
         if (targetContainerId) {
           // Avoid duplicate connections
-          const exists = newConnections.some(
+          const exists = newEdges.some(
             (conn) =>
               (conn.from === containerId && conn.to === targetContainerId) ||
               (conn.from === targetContainerId && conn.to === containerId)
           );
 
           if (!exists) {
-            newConnections.push({ from: containerId, to: targetContainerId });
+            newEdges.push({ from: containerId, to: targetContainerId });
           }
         }
       });
     });
 
-    const connectionsHaveChanged = !areConnectionsEqual(
-      prevConnectionsRef.current,
-      newConnections
+    const edgesHaveChanged = !areEdgesEqual(
+      prevEdgesRef.current,
+      newEdges
     );
 
-    if (connectionsHaveChanged) {
-      setConnections(newConnections);
+    if (edgesHaveChanged) {
+      setEdges(newEdges);
     }
   }, [containerData, mapType]);
 
@@ -832,16 +746,16 @@ useEffect(() => {
   useEffect(() => {
     const interval = setInterval(() => {
       if (autoPublish) {
-        publishToTopic(1);
+        publishToTopic('', 1);
       }
-    }, 250);
+    }, 1500);
     return () => clearInterval(interval);
   }, [autoPublish]);
 
   // Update node size based on number of containers
   useEffect(() => {
-    const minSize = 30; // Minimum node size
-    const maxSize = 40; // Maximum node size
+    const minSize = 35; // Minimum node size
+    const maxSize = 45; // Maximum node size
     const scalingFactor = 5; // Adjust this to control sensitivity
 
     if (containers.length === 0) {
@@ -892,16 +806,16 @@ useEffect(() => {
     const STABLE_ITERATIONS = 25; // Number of iterations required to consider stable
 
     // Compare connections to determine if they have changed
-    const connectionsHaveChanged = !areConnectionsEqual(
-      prevConnectionsRef.current,
-      connections
+    const edgesHaveChanged = !areEdgesEqual(
+      prevEdgesRef.current,
+      edges
     );
 
-    if (connectionsHaveChanged) {
+    if (edgesHaveChanged) {
       console.log('Connections changed. Resetting stabilization.');
       stableCountRef.current = 0; // Reset stability count
       stabilizedRef.current = false; // Mark the graph as not stabilized
-      prevConnectionsRef.current = connections; // Update stored connections
+      prevEdgesRef.current = edges; // Update stored edges
       if (intervalIdRef.current !== null) {
         window.clearInterval(intervalIdRef.current); // Clear the existing interval
       }
@@ -946,7 +860,7 @@ useEffect(() => {
           });
 
           // 2. Attractive Forces for connected nodes
-          connections.forEach((conn) => {
+          edges.forEach((conn) => {
             if (conn.from === node.id) {
               const targetNode = updatedData[conn.to];
               if (targetNode) {
@@ -1038,7 +952,7 @@ useEffect(() => {
         window.clearInterval(intervalIdRef.current); // Ensure interval is cleared on unmount
       }
     };
-  }, [connections, mapView, mapType]);
+  }, [edges, mapView, mapType]);
 
   return (
     <>
@@ -1106,6 +1020,33 @@ useEffect(() => {
                   <input
                     value={maxLatency}
                     onChange={(e) => setMaxLatency(e.target.value)}
+                    style={{ width: '4em' }}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
+          <div className="input-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={hasPacketLossSetting}
+                onChange={() => setHasPacketLossSettings(!hasPacketLossSetting)}
+              />
+              <span style={{ marginLeft: '5px' }}>
+                Start with packet loss
+              </span>
+            </label>
+          </div>
+          {hasPacketLossSetting && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+
+              <div className="input-group">
+                <label>
+                  Loss %
+                  <input
+                    value={packetLoss}
+                    onChange={(e) => setPacketLoss(e.target.value)}
                     style={{ width: '4em' }}
                   />
                 </label>
@@ -1231,7 +1172,7 @@ useEffect(() => {
 
         {/* Middle Section: Graph */}
         <div className="middle">
-          <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: 10 }}>
+          <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
             <h1>{mapType}</h1>
             <div>{`Total containers: ${containers.length}`}</div>
             <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
@@ -1277,7 +1218,7 @@ useEffect(() => {
             {mapView === 'graph' && (
               <div>
                 <svg className="connections">
-                  {connections.map((conn, index) => {
+                  {edges.map((conn, index) => {
                     const fromNode = containerData[conn.from];
                     const toNode = containerData[conn.to];
 
@@ -1404,7 +1345,7 @@ useEffect(() => {
             {mapView === 'circle' && (
               <div>
                 <svg className="connections">
-                  {connections.map((conn, index) => {
+                  {edges.map((conn, index) => {
                     const fromEl = containerRefs.current[conn.from];
                     const toEl = containerRefs.current[conn.to];
 
@@ -1542,23 +1483,23 @@ useEffect(() => {
           <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
-          <button onClick={() => publishToTopic(1)}>Publish to random peer</button>
-          <button onClick={() => publishToTopic(1000)}>Publish 1k to random peers</button>
+          <button onClick={() => publishToTopic('', 1)}>Publish to random peer</button>
+          <button onClick={() => publishToTopic('', 1000)}>Publish 1k to random peers</button>
           {selectedContainer && containerData[selectedContainer] && (
             <div>
               <h3>Peer Info</h3>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-                <button onClick={() => publishToPeer(selectedContainer, 1)}>Publish 1</button>
-                <button onClick={() => publishToPeer(selectedContainer, 1_000)}>Publish 1k</button>
-                <button onClick={() => publishToPeer(selectedContainer, 100_000)}>Publish 100k</button>
+                <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
+                <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
+                <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
                 <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
               </div>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
-              <div>Outbound Connections: {connections.filter(conn => conn.from === selectedContainer).length}</div>
-              <div>Inbound Connections: {connections.filter(conn => conn.to === selectedContainer).length}</div>
+              <div>Outbound Connections: {edges.filter(conn => conn.from === selectedContainer).length}</div>
+              <div>Inbound Connections: {edges.filter(conn => conn.to === selectedContainer).length}</div>
               <div>Mesh Peers: {containerData[selectedContainer]?.meshPeers?.length}</div>
               <div>Subscribers: {containerData[selectedContainer]?.subscribers?.length}</div>
               <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
@@ -1569,7 +1510,6 @@ useEffect(() => {
           )}
         </div>
 
-        {/* Styling */}
         <style jsx>{`
         .app-container {
           display: flex;
@@ -1578,7 +1518,7 @@ useEffect(() => {
 
         .sidebar {
           width: 250px;
-          padding: 15px;
+          padding: 10px 15px 0px;
           background-color: #111111;
           color: white;
           overflow-y: auto;

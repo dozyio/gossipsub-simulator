@@ -2,7 +2,7 @@ import { PeerId } from '@libp2p/interface'
 import { Libp2pType } from './types'
 import { WebSocketServer } from 'ws';
 import { isEqual } from './helpers.js';
-import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
+import { PeerIdStr, TopicStr } from '@chainsafe/libp2p-gossipsub/types';
 import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
@@ -32,6 +32,7 @@ export interface Update {
   subscribers?: string[],
   pubsubPeers?: string[],
   meshPeers?: string[],
+  fanoutList?: Map<TopicStr, Set<PeerIdStr>>
   libp2pPeers?: string[],
   connections?: string[],
   protocols?: string[],
@@ -68,6 +69,7 @@ export class StatusServer {
   private lastSubscribers: string[] = []
   private lastPubsubPeers: string[] = []
   private lastMeshPeers: string[] = []
+  private lastFanoutList: Map<TopicStr, Set<PeerIdStr>> = new Map<TopicStr, Set<PeerIdStr>>()
   private lastMessage: string = ''
   private lastPeerScores: PeerScores = {}
   private _message: string = ''
@@ -157,13 +159,15 @@ export class StatusServer {
       ws.on('message', async function incoming(msg) {
         const newMessage = JSON.parse(msg.toString())
 
-        switch (newMessage.type) {
-          case 'set-id':
+        switch (newMessage.mType) {
+          case 'set-id': {
             console.log('setting container id', newMessage.message)
             self.containerId = newMessage.message
-            ws.send(JSON.stringify({ status: "ok" }))
+            const update = await self.fullUpdate()
+            await self.sendUpdate(update)
             break
-          case 'info':
+          }
+          case 'info': {
             console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
 
             const update: Partial<Update> = {}
@@ -172,7 +176,8 @@ export class StatusServer {
 
             ws.send(JSON.stringify(update))
             break;
-          case 'publish':
+          }
+          case 'publish': {
             self.message = newMessage.message
             self.lastMessage = newMessage.message
 
@@ -186,6 +191,7 @@ export class StatusServer {
               console.log(e)
             }
             break;
+          }
           default:
             console.log('unknown message type', newMessage.type)
             break;
@@ -212,9 +218,7 @@ export class StatusServer {
   }
 
   private newUpdate = async (): Promise<Update> => {
-    const update: Update = {
-      containerId: this.containerId
-    }
+    const update: Update = {}
 
     // libp2p
     const peerId = this.peerId.toString()
@@ -298,6 +302,12 @@ export class StatusServer {
       update.meshPeers = meshPeers
     }
 
+    const fanoutList = (this.server.services.pubsub as GossipSub).fanout
+    if (!isEqual(fanoutList, this.lastFanoutList)) {
+      this.lastFanoutList= fanoutList
+      update.fanoutList = fanoutList
+    }
+
     const peerScores = this.getPeerScores()
     if (!isEqual(peerScores, this.lastPeerScores)) {
       this.lastPeerScores = peerScores
@@ -329,9 +339,7 @@ export class StatusServer {
   }
 
   private fullUpdate = async (): Promise<Update> => {
-    const update: Update = {
-      containerId: this.containerId
-    }
+    const update: Update = {}
 
     // libp2p
     const peerId = this.peerId.toString()
@@ -389,6 +397,10 @@ export class StatusServer {
     this.lastMeshPeers = meshPeers
     update.meshPeers = meshPeers
 
+    const fanoutList = (this.server.services.pubsub as GossipSub).fanout
+    this.lastFanoutList= fanoutList
+    update.fanoutList = fanoutList
+
     this.lastPeerScores = this.getPeerScores()
     update.peerScores = this.lastPeerScores
 
@@ -410,6 +422,8 @@ export class StatusServer {
 
   private sendUpdate = async (update: Update) => {
     if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores) {
+      update.containerId = this.containerId
+
       this.wss.clients.forEach((ws) => {
         if (ws.readyState === ws.OPEN) {
           ws.send(JSON.stringify(update));
