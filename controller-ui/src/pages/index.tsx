@@ -78,25 +78,25 @@ const CONTAINER_HEIGHT = 800;
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
   repulsion: 100_000, // Adjusted for CSE
-  attraction: 0.15, // Adjusted for CSE
+  attraction: 0.20, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
   damping: 0.10, // Velocity damping factor
   maxVelocity: 50, // Maximum velocity cap
-  naturalLength: 50, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 60, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
   "pubsubPeers": DEFAULT_FORCES,
+  "libp2pPeers": {
+    ...DEFAULT_FORCES,
+    naturalLength: 250,
+  },
   "meshPeers": DEFAULT_FORCES,
   "dhtPeers": DEFAULT_FORCES,
   "subscribers": DEFAULT_FORCES,
   "connections": DEFAULT_FORCES,
   "streams": DEFAULT_FORCES,
-  "libp2pPeers": {
-    ...DEFAULT_FORCES,
-    naturalLength: 250,
-  },
 }
 
 export default function Home() {
@@ -132,26 +132,25 @@ export default function Home() {
   const [nodeSize, setNodeSize] = useState<number>(35);
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
 
-  // Function to fetch containers from the backend
-  const fetchContainers = async () => {
-    try {
-      const response = await fetch('http://localhost:8080/containers');
-      if (!response.ok) {
-        throw new Error(`Error fetching containers: ${response.statusText}`);
-      }
-      const data: ContainerInfo[] = await response.json();
-      const runningContainers = data.filter((c) => c.state === 'running');
-      setContainers(runningContainers);
-
-      // Initialize container data with positions and velocities
-      initializeContainerData(runningContainers);
-    } catch (error) {
-      console.error('Error fetching containers:', error);
-      setContainers([]);
-      setContainerData({});
-      setConnections([]);
-    }
-  };
+  // const fetchContainers = async () => {
+  //   try {
+  //     const response = await fetch('http://localhost:8080/containers');
+  //     if (!response.ok) {
+  //       throw new Error(`Error fetching containers: ${response.statusText}`);
+  //     }
+  //     const data: ContainerInfo[] = await response.json();
+  //     const runningContainers = data.filter((c) => c.state === 'running');
+  //     setContainers(runningContainers);
+  //
+  //     // Initialize container data with positions and velocities
+  //     initializeContainerData(runningContainers);
+  //   } catch (error) {
+  //     console.error('Error fetching containers:', error);
+  //     setContainers([]);
+  //     setContainerData({});
+  //     setConnections([]);
+  //   }
+  // };
 
   const initializeContainerData = (runningContainers: ContainerInfo[]) => {
     setContainerData((prevData) => {
@@ -215,7 +214,7 @@ export default function Home() {
 
       const data = await response.json();
       console.log('Container started:', data);
-      await fetchContainers(); // Refresh the container list
+      // No need to call fetchContainers here since WebSocket will handle updates now
       return data;
     } catch (error) {
       console.error('Error starting container:', error);
@@ -293,7 +292,7 @@ export default function Home() {
         );
       }
       await Promise.all(promises);
-      await fetchContainers(); // Refresh the container list
+      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error starting containers:', error);
     }
@@ -318,7 +317,7 @@ export default function Home() {
       }
 
       console.log(`Container ${containerID} stopped`);
-      await fetchContainers(); // Refresh the container list
+      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error stopping container:', error);
     }
@@ -336,7 +335,7 @@ export default function Home() {
         throw new Error(`Error stopping all containers: ${errorText}`);
       }
 
-      await fetchContainers(); // Refresh the container list
+      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error stopping all containers:', error);
     }
@@ -383,7 +382,7 @@ export default function Home() {
       }
     }
 
-    await fetchContainers();
+    // No need to fetchContainers here, WebSocket updates container list
   };
 
   const getRandomColor = () => {
@@ -405,7 +404,7 @@ export default function Home() {
       );
 
       if (sockets.length === 0) {
-        console.warn('No active WebSocket connections available.');
+        // console.warn('No active WebSocket connections available.');
         return null;
       }
 
@@ -518,7 +517,7 @@ export default function Home() {
         }
 
         // Check if the current container is related
-        if (relatedContainerIds.includes(container.id)) {
+        // if (relatedContainerIds.includes(container.id)) {
           const peerId = node.peerId;
           if (hoverType === 'peerscore') {
             const score = sourceData?.peerScores[peerId];
@@ -531,7 +530,7 @@ export default function Home() {
               label = String(rtt); // Use rtt for label
             }
           }
-        }
+        // }
       }
     }
 
@@ -612,8 +611,51 @@ export default function Home() {
     );
   };
 
-  // Manage WebSocket connections
-  useEffect(() => {
+  function createContainerWebSocket(
+    container: ContainerInfo,
+    handleWebSocketMessage: (containerId: string, data: ContainerData) => void
+  ): WebSocket | null {
+    const portMapping = container.ports.find(
+      (port) => port.private_port === 80 && port.type === 'tcp'
+    );
+
+    if (!portMapping || !portMapping.public_port) {
+      return null;
+    }
+
+    // console.log('got port mapping', portMapping)
+
+    const wsUrl = `ws://localhost:${portMapping.public_port}/`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log(`WebSocket connected for container ${container.id}`);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data: ContainerData = JSON.parse(event.data);
+        handleWebSocketMessage(container.id, data);
+      } catch (error) {
+        console.error(
+          `Error parsing WebSocket message from container ${container.id}:`,
+          error
+        );
+      }
+    };
+
+    ws.onerror = (error) => {
+      console.error(`WebSocket error for container ${container.id}:`, error);
+    };
+
+    ws.onclose = () => {
+      console.log(`WebSocket closed for container ${container.id}`);
+      containerSockets.current[container.id] = null;
+    };
+
+    return ws;
+  }
+
     // Function to handle WebSocket messages and update containerData
     const handleWebSocketMessage = (containerId: string, data: ContainerData) => {
       setContainerData((prevData) => {
@@ -656,50 +698,49 @@ export default function Home() {
       }
     };
 
-    containers.forEach((container) => {
-      // If we don't already have a WebSocket connection for this container
-      if (!containerSockets.current[container.id]) {
-        // Find the public port that maps to container's port 80
-        const portMapping = container.ports.find(
-          (port) => port.private_port === 80 && port.type === 'tcp'
-        );
+  // WebSocket for container list updates from controller
+  // Receives full running containers list on connection and whenever containers start/stop
+  useEffect(() => {
+    const ws = new WebSocket("ws://localhost:8080/ws");
 
-        if (portMapping && portMapping.public_port) {
-          const wsUrl = `ws://localhost:${portMapping.public_port}/`;
-          const ws = new WebSocket(wsUrl);
+    ws.onopen = () => {
+      console.log("Main WebSocket connected - receiving container updates.");
+    };
 
-          ws.onopen = () => {
-            console.log(`WebSocket connected for container ${container.id}`);
-          };
-
-          ws.onmessage = (event) => {
-            try {
-              const data: ContainerData = JSON.parse(event.data);
-              handleWebSocketMessage(container.id, data);
-            } catch (error) {
-              console.error(
-                `Error parsing WebSocket message from container ${container.id}:`,
-                error
-              );
-            }
-          };
-
-          ws.onerror = (error) => {
-            console.error(`WebSocket error for container ${container.id}:`, error);
-          };
-
-          ws.onclose = () => {
-            console.log(`WebSocket closed for container ${container.id}`);
-            // Remove the WebSocket from the map
-            containerSockets.current[container.id] = null;
-          };
-
-          // Store the WebSocket
-          containerSockets.current[container.id] = ws;
-        }
+    ws.onmessage = (event) => {
+      try {
+        const updatedContainers: ContainerInfo[] = JSON.parse(event.data);
+        const runningContainers = updatedContainers.filter((c) => c.state === 'running');
+        setContainers(runningContainers);
+        initializeContainerData(runningContainers);
+      } catch (error) {
+        console.error("Error parsing containers from main WebSocket:", error);
       }
-    });
+    };
 
+    ws.onerror = (error) => {
+      console.error("Main WebSocket error:", error);
+    };
+
+    ws.onclose = () => {
+      console.log("Main WebSocket closed.");
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
+
+  // Manage WebSocket connections for individual containers
+  useEffect(() => {
+  containers.forEach((container) => {
+    if (!containerSockets.current[container.id]) {
+      const ws = createContainerWebSocket(container, handleWebSocketMessage);
+      if (ws) {
+        containerSockets.current[container.id] = ws;
+      }
+    }
+  });
     // Clean up WebSocket connections for containers that no longer exist
     Object.keys(containerSockets.current).forEach((containerId) => {
       if (!containers.find((c) => c.id === containerId)) {
@@ -713,6 +754,21 @@ export default function Home() {
       }
     });
   }, [containers]);
+
+useEffect(() => {
+  const interval = setInterval(() => {
+    containers.forEach((container) => {
+      if (!containerSockets.current[container.id]) {
+        const ws = createContainerWebSocket(container, handleWebSocketMessage);
+        if (ws) {
+          containerSockets.current[container.id] = ws;
+        }
+      }
+    });
+  }, 5000);
+
+  return () => clearInterval(interval);
+}, [containers]);
 
   // Update connections based on current containerData and mapType
   useEffect(() => {
@@ -766,15 +822,7 @@ export default function Home() {
     }
   }, [containerData, mapType]);
 
-  // Fetch containers periodically
-  useEffect(() => {
-    fetchContainers();
-
-    const interval = setInterval(async () => {
-      await fetchContainers();
-    }, 500);
-    return () => clearInterval(interval);
-  }, []);
+  // Removed the polling-based fetchContainers interval. We rely on WebSocket updates now.
 
   // Auto publish if enabled
   useEffect(() => {
@@ -873,7 +921,7 @@ export default function Home() {
           // Check node stability
           if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
             allStable = false; // Node is still moving
-            console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
+            // console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
             stableCountRef.current = 0;
           }
 
@@ -1407,20 +1455,16 @@ export default function Home() {
                         }
                       }
 
-                      // Determine the stroke color based on the protocol
                       let strokeColor = '#ffffff'; // Default color
 
                       if (connectionProtocol) {
-                        // Define a color mapping based on protocol
                         const protocolColorMap: { [key: string]: string } = {
                           '/meshsub/1.2.0': '#0fff00',
                           '/ipfs/id/1.0.0': '#00ff00',
                           '/ipfs/ping/1.0.0': '#000ff0',
-                          // Add more protocols and their corresponding colors here
                         };
                         strokeColor = protocolColorMap[connectionProtocol] || '#000000';
                       } else {
-                        // For connections without a protocol, use default coloring
                         strokeColor = `#${conn.from.substring(0, 6)}`;
                       }
                       if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {

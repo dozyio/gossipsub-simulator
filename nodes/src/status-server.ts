@@ -150,6 +150,7 @@ export class StatusServer {
     });
 
     wss.on('connection', async function connection(ws) {
+      console.log('new websocket connection')
       ws.on('error', console.error);
       ws.on('pong', self.heartbeat);
       ws.on('message', async function incoming(msg) {
