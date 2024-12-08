@@ -111,12 +111,20 @@ func broadcastContainers() {
 		return
 	}
 
-	data, err := json.Marshal(containerInfos)
+	message := map[string]interface{}{
+		"type": "containerList",
+		"data": containerInfos,
+	}
+	data, err := json.Marshal(message)
 	if err != nil {
 		fmt.Printf("Failed to marshal containers for broadcast: %v\n", err)
 		return
 	}
 
+	broadcastToClients(data)
+}
+
+func broadcastToClients(data []byte) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	for c := range clients {
@@ -606,7 +614,7 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
-	// Upgrade to websocket
+	// Upgrade to websocket (clients)
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		http.Error(w, "Could not open websocket", http.StatusBadRequest)
@@ -620,7 +628,7 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Send current list of containers immediately
 	go broadcastContainers()
 
-	// Read messages from client (optional, here just to keep connection alive)
+	// Keep connection alive, read messages
 	go func() {
 		defer func() {
 			clientsMu.Lock()
@@ -633,6 +641,33 @@ func wsHandler(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				// Client disconnected
 				return
+			}
+		}
+	}()
+}
+
+func wsNodeUpdatesHandler(w http.ResponseWriter, r *http.Request) {
+	// Upgrade to websocket for node updates
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		http.Error(w, "Could not open websocket for node updates", http.StatusBadRequest)
+		return
+	}
+
+	go func() {
+		defer conn.Close()
+
+		for {
+			mt, message, err := conn.ReadMessage()
+			if err != nil {
+				fmt.Printf("Error reading message from node: %v\n", err)
+				return
+			}
+
+			if mt == websocket.TextMessage {
+				// Expect message to have a "type": "nodeStatus" field or similar
+				// Just broadcast the raw message to clients
+				broadcastToClients(message)
 			}
 		}
 	}()
@@ -729,6 +764,7 @@ func main() {
 	mux.HandleFunc("/containers/create", createContainerHandler)
 	mux.HandleFunc("/containers/stopall", stopAllContainersHandler)
 	mux.HandleFunc("/ws", wsHandler)
+	mux.HandleFunc("/ws/node-updates", wsNodeUpdatesHandler)
 
 	handler := enableCors(mux)
 

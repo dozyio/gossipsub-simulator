@@ -89,9 +89,13 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
             // IPColocationFactorWeight: 0,
             // behaviourPenaltyWeight: 0,
             appSpecificScore: applicationScore,
+            topicScoreCap: 50,
             topics: {
               [topic]: createTopicScoreParams({
-                topicWeight: 1
+                topicWeight: 1,
+                firstMessageDeliveriesWeight: 10,
+                firstMessageDeliveriesDecay: 0.9,
+                firstMessageDeliveriesCap: 50,
               })
             }
           }),
@@ -103,7 +107,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
             publishThreshold: -50,
             graylistThreshold: -80,
             acceptPXThreshold: 100,
-            // opportunisticGraftThreshold: 5,
+            opportunisticGraftThreshold: 20,
           }
         }),
         lanDHT: kadDHT({

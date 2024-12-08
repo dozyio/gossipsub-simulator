@@ -298,7 +298,6 @@ export default function Home() {
     }
   };
 
-  // Function to stop a container
   const stopContainer = async (containerID: string) => {
     try {
       const response = await fetch('http://localhost:8080/containers/stop', {
@@ -323,7 +322,6 @@ export default function Home() {
     }
   };
 
-  // Function to stop all containers
   const stopAllContainers = async () => {
     try {
       const response = await fetch('http://localhost:8080/containers/stopall', {
@@ -699,7 +697,7 @@ export default function Home() {
     };
 
   // WebSocket for container list updates from controller
-  // Receives full running containers list on connection and whenever containers start/stop
+  // Receives containers list
   useEffect(() => {
     const ws = new WebSocket("ws://localhost:8080/ws");
 
@@ -709,7 +707,13 @@ export default function Home() {
 
     ws.onmessage = (event) => {
       try {
-        const updatedContainers: ContainerInfo[] = JSON.parse(event.data);
+        const json = JSON.parse(event.data)
+        if (json.type !== 'containerList') {
+          console.log('unknown type', json.type)
+          return
+        }
+
+        const updatedContainers: ContainerInfo[] = json.data;
         const runningContainers = updatedContainers.filter((c) => c.state === 'running');
         setContainers(runningContainers);
         initializeContainerData(runningContainers);
@@ -879,7 +883,7 @@ useEffect(() => {
 
   // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
-    console.log('useEffect triggered');
+    // console.log('useEffect triggered');
     if (mapView !== 'graph') return;
 
     const centerX = CONTAINER_WIDTH / 2;

@@ -78,9 +78,13 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       allowPublishToZeroTopicPeers: true, // don't throw if no peers
       scoreParams: createPeerScoreParams({
         appSpecificScore: applicationScore,
+        topicScoreCap: 50,
         topics: {
           [topic]: createTopicScoreParams({
-            topicWeight: 1
+            topicWeight: 1,
+            firstMessageDeliveriesWeight: 20,
+            firstMessageDeliveriesDecay: 0.9,
+            firstMessageDeliveriesCap: 50,
           })
         }
       }),
@@ -89,7 +93,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
         publishThreshold: -50,
         graylistThreshold: -80,
         acceptPXThreshold: 100,
-        opportunisticGraftThreshold: 5,
+        opportunisticGraftThreshold: 20,
       },
       directConnectTicks: 30,
       // directConnectInitialDelay: 500,
