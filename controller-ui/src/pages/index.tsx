@@ -87,7 +87,7 @@ const DEFAULT_FORCES = {
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
   damping: 0.10, // Velocity damping factor
-  maxVelocity: 50, // Maximum velocity cap
+  maxVelocity: 80, // Maximum velocity cap
   naturalLength: 60, // Natural length for springs (ideal distance between connected nodes)
 }
 
