@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -82,7 +83,13 @@ type ContainerWSReq struct {
 func listContainers() ([]ContainerInfo, error) {
 	ctx := context.Background()
 
-	containers, err := DockerClient.ContainerList(ctx, container.ListOptions{All: false})
+	containers, err := DockerClient.ContainerList(
+		ctx,
+		container.ListOptions{
+			All:     false,
+			Filters: filters.NewArgs(filters.Arg("status", "running")),
+		},
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
@@ -809,6 +816,50 @@ func getRandomColor() string {
 	return color
 }
 
+func getRandomColorV2() string {
+	for {
+		// Generate random color
+		colorVal := rand.IntN(0xFFFFFF + 1)
+		r := uint8((colorVal >> 16) & 0xFF)
+		g := uint8((colorVal >> 8) & 0xFF)
+		b := uint8(colorVal & 0xFF)
+
+		// Inline channel luminance calculation:
+		// Converts a channel from 0–255 to a linearized RGB value.
+		channelLuminance := func(c uint8) float64 {
+			sc := float64(c) / 255.0
+			if sc <= 0.03928 {
+				return sc / 12.92
+			}
+			return math.Pow((sc+0.055)/1.055, 2.4)
+		}
+
+		// Calculate relative luminance for the generated color
+		R := channelLuminance(r)
+		G := channelLuminance(g)
+		B := channelLuminance(b)
+		bgLum := 0.2126*R + 0.7152*G + 0.0722*B
+
+		whiteLum := 1.0 // approximate luminance of white
+		var brighter, darker float64
+		if bgLum > whiteLum {
+			brighter = bgLum
+			darker = whiteLum
+		} else {
+			brighter = whiteLum
+			darker = bgLum
+		}
+
+		// Contrast ratio calculation
+		ratio := (brighter + 0.05) / (darker + 0.05)
+
+		// If contrast ratio is acceptable (>= 4.5), return the color
+		if ratio >= 4.5 {
+			return fmt.Sprintf("#%06X", colorVal)
+		}
+	}
+}
+
 func publishHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		Amount      int    `json:"amount"`
@@ -851,7 +902,7 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 
 		message := &ContainerWSReq{
 			MType:   "publish",
-			Message: getRandomColor(),
+			Message: getRandomColorV2(),
 		}
 
 		msg, err := json.Marshal(message)

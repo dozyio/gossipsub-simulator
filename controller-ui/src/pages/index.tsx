@@ -119,6 +119,7 @@ export default function Home() {
   const [protocols, setProtocols] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
   const [selectedContainer, setSelectedContainer] = useState<string>('');
+  const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
 
   // network config
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
@@ -507,7 +508,7 @@ export default function Home() {
         if (hoverType === 'peerscore') {
           const score = sourceData?.peerScores[peerId];
           if (score !== undefined) {
-            label = String(score); // Use peerScore for label
+            label = String(score.toFixed(1)); // Use peerScore for label
           }
         } else if (hoverType === 'rtt') {
           const rtt = sourceData?.rtts[peerId];
@@ -575,15 +576,19 @@ export default function Home() {
   };
 
   const getBorderStyle = (containerId: string) => {
-    if (containerData[containerId]?.type === 'bootstrapper') {
-      return '4px solid White';
-    }
-
     if (selectedContainer === containerId) {
       return '2px solid White';
     }
 
     return '0px';
+  };
+
+  const getBorderRadius = (containerId: string) => {
+    if (containerData[containerId]?.type === 'bootstrapper') {
+      return '4px';
+    }
+
+    return '50%';
   };
 
   // Utility function to generate random positions within the container
@@ -688,7 +693,7 @@ export default function Home() {
     };
   }, []);
 
-  // Update connections based on current containerData and mapType
+  // Update edges based on current containerData and mapType
   useEffect(() => {
     const newEdges: { from: string; to: string }[] = [];
 
@@ -716,7 +721,7 @@ export default function Home() {
         );
 
         if (targetContainerId) {
-          // Avoid duplicate connections
+          // Avoid duplicate edges
           const exists = newEdges.some(
             (conn) =>
               (conn.from === containerId && conn.to === targetContainerId) ||
@@ -748,7 +753,7 @@ export default function Home() {
       if (autoPublish) {
         publishToTopic('', 1);
       }
-    }, 1500);
+    }, Number(autoPublishInterval));
     return () => clearInterval(interval);
   }, [autoPublish]);
 
@@ -805,14 +810,13 @@ export default function Home() {
     const VELOCITY_THRESHOLD = 0.015; // Threshold for stability
     const STABLE_ITERATIONS = 25; // Number of iterations required to consider stable
 
-    // Compare connections to determine if they have changed
     const edgesHaveChanged = !areEdgesEqual(
       prevEdgesRef.current,
       edges
     );
 
     if (edgesHaveChanged) {
-      console.log('Connections changed. Resetting stabilization.');
+      console.log('Edges changed. Resetting stabilization.');
       stableCountRef.current = 0; // Reset stability count
       stabilizedRef.current = false; // Mark the graph as not stabilized
       prevEdgesRef.current = edges; // Update stored edges
@@ -1111,15 +1115,18 @@ export default function Home() {
           )}
 
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={handleStartBootstrap1}>Bootstrap1</button>
-            <button onClick={handleStartBootstrap2}>Bootstrap2</button>
+            <div style={{ display: 'flex', gap: '0px 15px' }}>
+              <button onClick={handleStartBootstrap1}>Bootstrap 1</button>
+              <button onClick={handleStartBootstrap2}>Bootstrap 2</button>
+            </div>
             <button onClick={handleStartContainer}>Container</button>
-            <button onClick={() => handleStartXContainers(12)}>12 Containers</button>
+            <button onClick={() => handleStartXContainers(10)}>10 Containers</button>
           </div>
+
           <h3>Stop Containers</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={() => stopXContainers(5)} className="short">Stop 5</button>
-            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }} className="short">Stop All</button>
+          <div style={{ display: 'flex', gap: '0px 10px' }}>
+            <button onClick={() => stopXContainers(5)}>Stop 5</button>
+            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
           </div>
           <h3>Show</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -1137,7 +1144,6 @@ export default function Home() {
               <h3>Stream Protocols</h3>
               {protocols.length > 0 ? (
                 <div>
-                  {/* "Select All" and "Clear Selection" Buttons */}
                   <div style={{ marginBottom: '10px' }}>
                     <button onClick={() => setSelectedProtocols(protocols)} style={{ marginRight: '10px' }}>
                       Select All
@@ -1148,7 +1154,7 @@ export default function Home() {
                   </div>
                   {/* Protocol Checkboxes */}
                   <ul>
-                    {protocols.map((protocol, index) => (
+                    {[...protocols].sort().map((protocol, index) => (
                       <li key={index}>
                         <label>
                           <input
@@ -1214,10 +1220,10 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div className="container-circle">
+          <div className="graph">
             {mapView === 'graph' && (
               <div>
-                <svg className="connections">
+                <svg className="edges">
                   {edges.map((conn, index) => {
                     const fromNode = containerData[conn.from];
                     const toNode = containerData[conn.to];
@@ -1260,7 +1266,7 @@ export default function Home() {
                         }
                       }
 
-                      // If protocols are selected, filter connections
+                      // If protocols are selected, filter edges
                       if (selectedProtocols.length > 0 && mapType === 'streams') {
                         if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
                           return null; // Do not render this connection
@@ -1316,7 +1322,7 @@ export default function Home() {
                     <div
                       key={container.id}
                       ref={(el) => { containerRefs.current[container.id] = el; }}
-                      className="container-item"
+                      className="container"
                       onClick={() => handleContainerClick(container.id)}
                       onMouseEnter={() => setHoveredContainerId(container.id)}
                       onMouseLeave={() => setHoveredContainerId(null)}
@@ -1329,6 +1335,7 @@ export default function Home() {
                         fontSize: `${Math.max(8, nodeSize / 3)}px`,
                         backgroundColor: `${getBackgroundColor(container.id)}`,
                         border: `${getBorderStyle(container.id)}`,
+                        borderRadius: `${getBorderRadius(container.id)}`,
                         position: 'absolute',
                         transform: `translate(-50%, -50%)`, // Center the node
                         transition: 'background-color 0.2s, border 0.1s', // Smooth transitions
@@ -1344,7 +1351,7 @@ export default function Home() {
 
             {mapView === 'circle' && (
               <div>
-                <svg className="connections">
+                <svg className="edges">
                   {edges.map((conn, index) => {
                     const fromEl = containerRefs.current[conn.from];
                     const toEl = containerRefs.current[conn.to];
@@ -1450,7 +1457,7 @@ export default function Home() {
                     <div
                       key={container.id}
                       ref={(el) => { containerRefs.current[container.id] = el; }}
-                      className="container-item"
+                      className="container"
                       onClick={() => handleContainerClick(container.id)}
                       onMouseEnter={() => setHoveredContainerId(container.id)}
                       onMouseLeave={() => setHoveredContainerId(null)}
@@ -1463,7 +1470,8 @@ export default function Home() {
                         transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                         fontSize: `${fontSize}px`,
                         backgroundColor: `${getBackgroundColor(container.id)}`,
-                        border: `${getBorderStyle(container.id)}`
+                        border: `${getBorderStyle(container.id)}`,
+                        borderRadius: `${getBorderRadius(container.id)}`
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -1483,6 +1491,18 @@ export default function Home() {
           <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
+          {autoPublish && (
+            <div className="input-group">
+              <label>
+                Interval
+                <input
+                  value={autoPublishInterval}
+                  onChange={(e) => setAutoPublishInterval(e.target.value)}
+                  style={{ width: '5em' }}
+                /> ms
+              </label>
+            </div>
+          )}
           <button onClick={() => publishToTopic('', 1)}>Publish to random peer</button>
           <button onClick={() => publishToTopic('', 1000)}>Publish 1k to random peers</button>
           {selectedContainer && containerData[selectedContainer] && (
@@ -1587,7 +1607,7 @@ export default function Home() {
           position: relative;
         }
 
-        .container-circle {
+        .graph {
           position: relative;
           width: ${CONTAINER_WIDTH}px;
           height: ${CONTAINER_HEIGHT}px;
@@ -1596,7 +1616,7 @@ export default function Home() {
           user-select: none;
         }
 
-        .connections {
+        .edges {
           position: absolute;
           width: 100%;
           height: 100%;
@@ -1605,7 +1625,7 @@ export default function Home() {
           pointer-events: none; /* Allow clicks to pass through */
         }
 
-        .container-item {
+        .container {
           position: absolute;
           background-color: #0070f3;
           color: white;

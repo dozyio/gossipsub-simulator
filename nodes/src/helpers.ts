@@ -85,7 +85,7 @@ export const hexStringToUint8Array = (hexString: string) => {
 
 export function applicationScore(p: string) {
   if (p === bootstrapper1PeerId || p === bootstrapper2PeerId) {
-    return 150
+    return 1200
   }
 
   return 0

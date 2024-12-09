@@ -16,7 +16,7 @@ import { Libp2pType } from './types'
 import { StatusServer } from './status-server'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
-import { bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId } from './consts'
+import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts'
 import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 
 (async () => {
@@ -85,30 +85,62 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
           doPX: false,
           emitSelf: false,
           allowPublishToZeroTopicPeers: true, // don't throw if no peers
+          pruneBackoff: 60 * 1000,
           scoreParams: createPeerScoreParams({
-            // IPColocationFactorWeight: 0,
-            // behaviourPenaltyWeight: 0,
+            // P5
             appSpecificScore: applicationScore,
-            topicScoreCap: 50,
+
+            // P6
+            IPColocationFactorWeight: 0,
+            IPColocationFactorThreshold: 0,
+            IPColocationFactorWhitelist: new Set<string>(),
+
+            // P7
+            behaviourPenaltyWeight: 0, 
+            behaviourPenaltyThreshold: 0,
+            behaviourPenaltyDecay: 0,
+
+            topicScoreCap: topicScoreCap,
+
             topics: {
               [topic]: createTopicScoreParams({
-                topicWeight: 1,
-                firstMessageDeliveriesWeight: 10,
-                firstMessageDeliveriesDecay: 0.9,
-                firstMessageDeliveriesCap: 50,
+                topicWeight: topicWeight,
+
+                // P1
+                timeInMeshWeight: timeInMeshWeight,
+                timeInMeshQuantum: timeInMeshQuantum,
+                timeInMeshCap: timeInMeshCap,
+
+                // P2
+                firstMessageDeliveriesWeight: firstMessageDeliveriesWeight,
+                firstMessageDeliveriesDecay: firstMessageDeliveriesDecay,
+                firstMessageDeliveriesCap: firstMessageDeliveriesCap,
+
+                // P3
+                meshMessageDeliveriesWeight: 0,
+                // meshMessageDeliveriesDecay: 0,
+                // meshMessageDeliveriesCap: 0,
+                // meshMessageDeliveriesThreshold: 0,
+                // meshMessageDeliveriesWindow: 0,
+                // meshMessageDeliveriesActivation: 0,
+
+                // P3b
+                meshFailurePenaltyWeight: 0,
+                // meshFailurePenaltyDecay: 0,
+
+                // P4
+                invalidMessageDeliveriesWeight: 0,
+                // invalidMessageDeliveriesDecay: 0,
               })
             }
           }),
           scoreThresholds: {
-            // gossipThreshold: -4000,
-            // publishThreshold: -8000,
-            // graylistThreshold: -16000,
-            gossipThreshold: -10,
-            publishThreshold: -50,
-            graylistThreshold: -80,
-            acceptPXThreshold: 100,
-            opportunisticGraftThreshold: 20,
-          }
+            gossipThreshold: gossipScoreThreshold,
+            publishThreshold: publishScoreThreshold,
+            graylistThreshold: graylistScoreThreshold,
+            acceptPXThreshold: acceptPXScoreThreshold,
+            opportunisticGraftThreshold: opportunisticGraftScoreThreshold,
+          },
         }),
         lanDHT: kadDHT({
           protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
