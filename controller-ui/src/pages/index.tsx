@@ -146,6 +146,9 @@ export default function Home() {
   const [nodeSize, setNodeSize] = useState<number>(35);
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
 
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimeout = useRef<number | null>(null);
+
   const initializeContainerData = (runningContainers: ContainerInfo[]) => {
     setContainerData((prevData) => {
       const newData: { [id: string]: ContainerData } = {};
@@ -401,6 +404,10 @@ export default function Home() {
   // };
 
   const publishToTopic = async (containerId: string = '', amount = 1) => {
+    if (containers.length === 0) {
+      return
+    }
+
     interface Body {
       amount: number
       containerId?: string
@@ -651,45 +658,72 @@ export default function Home() {
   // WebSocket for controller
   // Receives containers list and node updates
   useEffect(() => {
-    const ws = new WebSocket(WS_ENDPOINT);
+    const connectWebSocket = () => {
+      console.log("Attempting to connect WebSocket...");
+      const ws = new WebSocket(WS_ENDPOINT);
 
-    ws.onopen = () => {
-      console.log("Main WebSocket connected - receiving container updates.");
-    };
+      ws.onopen = () => {
+        console.log("Controller WebSocket: connected");
+        wsRef.current = ws; // Store the connected WebSocket instance
+      };
 
-    ws.onmessage = (event) => {
-      try {
-        const json = JSON.parse(event.data)
-        switch (json.mType) {
-          case "containerList":
-            const updatedContainers: ContainerInfo[] = json.data;
-            const runningContainers = updatedContainers.filter((c) => c.state === 'running');
-            setContainers(runningContainers);
-            initializeContainerData(runningContainers);
-            break
-          case "nodeStatus":
-            handleWebSocketMessage(json)
-            break
-          default:
-            console.log('unknown type', json.type)
-            return
+      ws.onmessage = (event) => {
+        try {
+          const json = JSON.parse(event.data);
+          switch (json.mType) {
+            case "containerList":
+              const updatedContainers: ContainerInfo[] = json.data;
+              const runningContainers = updatedContainers.filter(
+                (c) => c.state === "running"
+              );
+              setContainers(runningContainers);
+              initializeContainerData(runningContainers);
+              break;
+            case "nodeStatus":
+              handleWebSocketMessage(json);
+              break;
+            default:
+              console.log(
+                "Controller WebSocket: unknown type",
+                json.mType
+              );
+          }
+        } catch (error) {
+          console.error(
+            "Controller WebSocket: Error parsing message:",
+            error
+          );
         }
+      };
 
-      } catch (error) {
-        console.error("Error parsing containers from main WebSocket:", error);
+      ws.onerror = (error) => {
+        console.error("Controller WebSocket: Error:", error);
+      };
+
+      ws.onclose = () => {
+        console.log("Controller WebSocket: closed. Attempting to reconnect...");
+        attemptReconnect();
+      };
+
+      wsRef.current = ws; // Store the WebSocket instance
+    };
+
+    const attemptReconnect = () => {
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current); // Clear any existing reconnect timeouts
       }
+      reconnectTimeout.current = window.setTimeout(() => {
+        connectWebSocket();
+      }, 3000); // Attempt reconnect after 3000ms
     };
 
-    ws.onerror = (error) => {
-      console.error("Main WebSocket error:", error);
-    };
-
-    ws.onclose = () => {
-      console.log("Main WebSocket closed.");
-    };
+    connectWebSocket(); // Initial connection
 
     return () => {
-      ws.close();
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+      }
+      wsRef.current?.close(); // Close the WebSocket connection on unmount
     };
   }, []);
 
@@ -755,7 +789,7 @@ export default function Home() {
       }
     }, Number(autoPublishInterval));
     return () => clearInterval(interval);
-  }, [autoPublish]);
+  }, [autoPublish, containers]);
 
   // Update node size based on number of containers
   useEffect(() => {
@@ -956,7 +990,7 @@ export default function Home() {
         window.clearInterval(intervalIdRef.current); // Ensure interval is cleared on unmount
       }
     };
-  }, [edges, mapView, mapType]);
+  }, [edges, mapView, mapType, containers]);
 
   return (
     <>
@@ -1518,13 +1552,15 @@ export default function Home() {
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
-              <div>Outbound Connections: {edges.filter(conn => conn.from === selectedContainer).length}</div>
-              <div>Inbound Connections: {edges.filter(conn => conn.to === selectedContainer).length}</div>
+              <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
               <div>Mesh Peers: {containerData[selectedContainer]?.meshPeers?.length}</div>
+              <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div>
+              <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div>
               <div>Subscribers: {containerData[selectedContainer]?.subscribers?.length}</div>
               <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
               <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
               <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index}>{p}</p>)}</div>
+              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index}>{p}</p>)}</div>
               <div>Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}</div>
             </div>
           )}

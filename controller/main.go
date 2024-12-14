@@ -996,6 +996,51 @@ func cleanup() {
 	startedContainers = nil
 }
 
+func repopulateState() {
+	ctx := context.Background()
+
+	// List all running containers
+	containers, err := DockerClient.ContainerList(ctx, container.ListOptions{
+		All:     false,
+		Filters: filters.NewArgs(filters.Arg("status", "running")),
+	})
+	if err != nil {
+		log.Fatalf("Failed to list running containers: %v", err)
+	}
+
+	startedContainersMutex.Lock()
+	defer startedContainersMutex.Unlock()
+
+	for _, c := range containers {
+		containerID := c.ID[:12]
+		startedContainers = append(startedContainers, containerID)
+
+		// Attempt to reconnect WebSocket for the container
+		hostPort := 0
+		for _, port := range c.Ports {
+			if port.Type == "tcp" {
+				hostPort = int(port.PublicPort)
+				break
+			}
+		}
+
+		if hostPort > 0 {
+			go func(containerID string, hostPort int) {
+				err := setContainerIDAndListen(hostPort, containerID)
+				if err != nil {
+					log.Printf("Failed to re-establish WebSocket for container %s: %v", containerID, err)
+				} else {
+					log.Printf("Re-established WebSocket for container %s", containerID)
+				}
+			}(containerID, hostPort)
+		} else {
+			log.Printf("No accessible TCP port found for container %s; skipping WebSocket reconnection.", containerID)
+		}
+	}
+
+	log.Printf("Repopulated state: %d containers", len(startedContainers))
+}
+
 func main() {
 	var err error
 
@@ -1012,6 +1057,8 @@ func main() {
 	if err := ensureNetwork(DockerClient, networkName); err != nil {
 		log.Fatalf("NETWORK %s does not exist", networkName)
 	}
+
+	repopulateState()
 
 	// Subscribe to Docker events
 	go func() {
