@@ -43,9 +43,9 @@ interface ContainerData {
   id: string; // Unique identifier
   peerId: string;
   pubsubPeers: string[];
-  subscribers: string[];
+  subscribersList: Record<string, string[]>;
   libp2pPeers: string[];
-  meshPeers: string[];
+  meshPeersList: Record<string, string[]>;
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[];
   connections: string[]; // IDs of connected containers
@@ -117,11 +117,14 @@ export default function Home() {
   const [hoverType, setHoverType] = useState<HoverType>('rtt');
   const [autoPublish, setAutoPublish] = useState<boolean>(false);
   const [protocols, setProtocols] = useState<string[]>([]);
+  const [topics, setTopics] = useState<string[]>([]);
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
+  const [selectedTopic, setSelectedTopics] = useState<string>('');
   const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
 
   // network config
+  const [topicsName, setTopicsName] = useState<string>('pubXXX-dev');
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
   const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false);
   const [gossipD, setGossipD] = useState<string>('8');
@@ -146,6 +149,7 @@ export default function Home() {
   const [nodeSize, setNodeSize] = useState<number>(35);
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
 
+  // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeout = useRef<number | null>(null);
 
@@ -165,9 +169,9 @@ export default function Home() {
             id: container.id,
             peerId: '',
             pubsubPeers: [],
-            subscribers: [],
+            subscribersList: {},
             libp2pPeers: [],
-            meshPeers: [],
+            meshPeersList: {},
             fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
             connections: [], // Will be updated via WebSocket
@@ -221,6 +225,8 @@ export default function Home() {
   };
 
   const envSetter = (env: string[], isBootstrap: boolean = false): string[] => {
+    env.push(`TOPICS=${topicsName}`)
+
     if (debugContainer) {
       env.push(DEBUG_STRING);
     }
@@ -246,10 +252,10 @@ export default function Home() {
     if (isBootstrap) {
       // https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#recommendations-for-network-operators
       // D=D_lo=D_hi=D_out=0
-      env.push(`GOSSIP_D=0`);
-      env.push(`GOSSIP_DLO=0`);
-      env.push(`GOSSIP_DHI=0`);
-      env.push(`GOSSIP_DOUT=0`);
+      env.push('GOSSIP_D=0');
+      env.push('GOSSIP_DLO=0');
+      env.push('GOSSIP_DHI=0');
+      env.push('GOSSIP_DOUT=0');
     } else {
       if (hasGossipDSettings) {
         env.push(`GOSSIP_D=${gossipD}`);
@@ -292,7 +298,6 @@ export default function Home() {
   };
 
   const handleStartXContainers = async (amount = 12) => {
-
     try {
       const promises = [];
       for (let i = 0; i < amount; i++) {
@@ -410,11 +415,13 @@ export default function Home() {
 
     interface Body {
       amount: number
+      topic: string
       containerId?: string
 
     }
     const body: Body = {
-      amount: amount
+      amount: amount,
+      topic: selectedTopic
     }
 
     if (containerId !== '') {
@@ -489,21 +496,36 @@ export default function Home() {
         let relatedPeerIds: string[] = [];
         let relatedContainerIds: string[] = [];
 
-        // Determine related peers/containers based on mapType
-        if (mapType === 'streams') {
-          relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
-        } else if (
-          mapType === 'connections' ||
-          mapType === 'pubsubPeers' ||
-          mapType === 'meshPeers' ||
-          mapType === 'libp2pPeers' ||
-          mapType === 'dhtPeers'
-        ) {
-          relatedPeerIds = sourceData[mapType]; // Peer IDs
+        switch (mapType) {
+          case 'streams':
+            relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
+            break
+          case 'connections':
+            relatedPeerIds = sourceData[mapType];
+            break
+          case 'pubsubPeers':
+            relatedPeerIds = sourceData[mapType];
+            break
+          case 'meshPeers':
+            relatedPeerIds = sourceData['meshPeersList'][selectedTopic];
+            break
+          case 'subscribers':
+            relatedPeerIds = sourceData['subscribersList'][selectedTopic];
+            break
+          case 'libp2pPeers':
+            relatedPeerIds = sourceData[mapType];
+            break
+          case 'dhtPeers':
+            relatedPeerIds = sourceData[mapType];
+            break
+
+          default:
+            relatedPeerIds = sourceData[mapType]; // Peer IDs
+            break
         }
 
         // Map peer IDs to container IDs if necessary
-        if (relatedPeerIds.length > 0) {
+        if (relatedPeerIds?.length > 0) {
           relatedContainerIds = Object.keys(containerData).filter(
             (id) => relatedPeerIds.includes(containerData[id]?.peerId)
           );
@@ -572,10 +594,12 @@ export default function Home() {
     });
   };
 
+  const handleTopicSelect = (topic: string) => {
+    setSelectedTopics(topic)
+  }
+
   const getBackgroundColor = (containerId: string) => {
-    if (containerData[containerId]?.[mapType] === undefined) {
-      return 'red';
-    } else if (converge) {
+    if (converge) {
       return containerData[containerId]?.lastMessage;
     } else {
       return `#${containerId.substring(0, 6)}`;
@@ -653,12 +677,37 @@ export default function Home() {
         return updatedProtocols;
       });
     }
+
+    // Update topics
+    if (data.topics) {
+      const newTopics = new Set<string>();
+      data.topics.forEach((topic) => {
+        newTopics.add(topic);
+      });
+
+      // Update the protocols state with new unique protocols
+      setTopics((prevTopics) => {
+        const updatedTopics = [...prevTopics];
+        newTopics.forEach((topic) => {
+          if (!updatedTopics.includes(topic)) {
+            updatedTopics.push(topic);
+          }
+        });
+        return updatedTopics;
+      });
+    }
   };
 
   // WebSocket for controller
   // Receives containers list and node updates
   useEffect(() => {
     const connectWebSocket = () => {
+      // Check if a WebSocket connection already exists
+      if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
+        console.log("WebSocket is already connected or connecting.");
+        return; // Do not create a new connection if one already exists
+      }
+
       console.log("Attempting to connect WebSocket...");
       const ws = new WebSocket(WS_ENDPOINT);
 
@@ -736,15 +785,33 @@ export default function Home() {
 
       let connectionList: string[] = [];
 
-      if (mapType === 'streams') {
-        const streamsByPeer = data.streams;
-        if (streamsByPeer && typeof streamsByPeer === 'object') {
-          connectionList = Object.keys(streamsByPeer);
+      switch (mapType) {
+        case 'streams':
+          const streamsByPeer = data.streams;
+          if (streamsByPeer && typeof streamsByPeer === 'object') {
+            connectionList = Object.keys(streamsByPeer);
+          }
+          break
+        case 'subscribers': {
+          const mapValue = data['subscribersList'][selectedTopic];
+          if (Array.isArray(mapValue)) {
+            connectionList = mapValue;
+          }
+          break
         }
-      } else {
-        const mapValue = data[mapType];
-        if (Array.isArray(mapValue)) {
-          connectionList = mapValue;
+        case 'meshPeers': {
+          const mapValue = data['meshPeersList'][selectedTopic];
+          if (Array.isArray(mapValue)) {
+            connectionList = mapValue;
+          }
+          break
+        }
+        default: {
+          const mapValue = data[mapType];
+          if (Array.isArray(mapValue)) {
+            connectionList = mapValue;
+          }
+          break
         }
       }
 
@@ -990,7 +1057,7 @@ export default function Home() {
         window.clearInterval(intervalIdRef.current); // Ensure interval is cleared on unmount
       }
     };
-  }, [edges, mapView, mapType, containers]);
+  }, [edges, mapView, mapType, containers, selectedTopic]);
 
   return (
     <>
@@ -1003,8 +1070,7 @@ export default function Home() {
       <div className="app-container">
         {/* Sidebar 1: Controls */}
         <div className="sidebar sidebar1">
-
-          <h3>Start Containers</h3>
+          <h3>Settings</h3>
           <div className="input-group">
             <label>
               Container Image Name:
@@ -1012,6 +1078,16 @@ export default function Home() {
                 type="text"
                 value={imageName}
                 onChange={(e) => setImageName(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="input-group">
+            <label>
+              PubSub Topics (comma sep):
+              <input
+                type="text"
+                value={topicsName}
+                onChange={(e) => setTopicsName(e.target.value)}
               />
             </label>
           </div>
@@ -1148,6 +1224,7 @@ export default function Home() {
             </div>
           )}
 
+          <h3>Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
             <div style={{ display: 'flex', gap: '0px 15px' }}>
               <button onClick={handleStartBootstrap1}>Bootstrap 1</button>
@@ -1157,7 +1234,6 @@ export default function Home() {
             <button onClick={() => handleStartXContainers(10)}>10 Containers</button>
           </div>
 
-          <h3>Stop Containers</h3>
           <div style={{ display: 'flex', gap: '0px 10px' }}>
             <button onClick={() => stopXContainers(5)}>Stop 5</button>
             <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
@@ -1166,48 +1242,97 @@ export default function Home() {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
             <button onClick={() => setMapType('connections')} className={mapType === 'connections' ? 'selected' : ''}>Connections</button>
             <button onClick={() => setMapType('meshPeers')} className={mapType === 'meshPeers' ? 'selected' : ''}>Mesh Peers</button>
-            <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>Streams</button>
+            {mapType === 'meshPeers' && (
+              <div className="selection-list">
+                <h3>Mesh Topics</h3>
+                {topics.length > 0 ? (
+                  <div>
+                    <ul>
+                      {[...topics].sort().map((topic, index) => (
+                        <li key={index}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedTopic === topic}
+                              onChange={() => handleTopicSelect(topic)}
+                            />
+                            {topic}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No topics available.</p>
+                )}
+              </div>
+            )}
             <button onClick={() => setMapType('subscribers')} className={mapType === 'subscribers' ? 'selected' : ''}>Subscribers</button>
+            {mapType === 'subscribers' && (
+              <div className="selection-list">
+                <h3>Subscription Topics</h3>
+                {topics.length > 0 ? (
+                  <div>
+                    <ul>
+                      {[...topics].sort().map((topic, index) => (
+                        <li key={index}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedTopic === topic}
+                              onChange={() => handleTopicSelect(topic)}
+                            />
+                            {topic}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No topics available.</p>
+                )}
+              </div>
+            )}
             <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>Pubsub Peer Store</button>
+            <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>Streams</button>
+            {/* Conditionally render protocols when mapType is 'streams' */}
+            {mapType === 'streams' && (
+              <div className="selection-list">
+                <h3>Stream Protocols</h3>
+                {protocols.length > 0 ? (
+                  <div>
+                    <div style={{ marginBottom: '10px' }}>
+                      <button onClick={() => setSelectedProtocols(protocols)} style={{ marginRight: '10px' }}>
+                        Select All
+                      </button>
+                      <button onClick={() => setSelectedProtocols([])}>
+                        Clear
+                      </button>
+                    </div>
+                    {/* Protocol Checkboxes */}
+                    <ul>
+                      {[...protocols].sort().map((protocol, index) => (
+                        <li key={index}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedProtocols.includes(protocol)}
+                              onChange={() => handleProtocolSelect(protocol)}
+                            />
+                            {protocol}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No protocols available.</p>
+                )}
+              </div>
+            )}
             <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>Libp2p Peer Store</button>
             <button onClick={() => setMapType('dhtPeers')} className={mapType === 'dhtPeers' ? 'selected' : ''}>DHT Known Peers</button>
           </div>
-          {/* Conditionally render protocols when mapType is 'streams' */}
-          {mapType === 'streams' && (
-            <div className="protocol-list">
-              <h3>Stream Protocols</h3>
-              {protocols.length > 0 ? (
-                <div>
-                  <div style={{ marginBottom: '10px' }}>
-                    <button onClick={() => setSelectedProtocols(protocols)} style={{ marginRight: '10px' }}>
-                      Select All
-                    </button>
-                    <button onClick={() => setSelectedProtocols([])}>
-                      Clear Selection
-                    </button>
-                  </div>
-                  {/* Protocol Checkboxes */}
-                  <ul>
-                    {[...protocols].sort().map((protocol, index) => (
-                      <li key={index}>
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={selectedProtocols.includes(protocol)}
-                            onChange={() => handleProtocolSelect(protocol)}
-                          />
-                          {protocol}
-                        </label>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ) : (
-                <p>No protocols available.</p>
-              )}
-            </div>
-          )}
-
         </div>
 
         {/* Middle Section: Graph */}
@@ -1218,19 +1343,6 @@ export default function Home() {
             <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
             <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
-            <div>
-              {`Containers without ${mapType}: ${containers.filter((c) => {
-                const data = containerData[c.id]?.[mapType];
-                if (Array.isArray(data)) {
-                  return data.length === 0;
-                } else if (typeof data === 'object' && data !== null) {
-                  return Object.keys(data).length === 0;
-                }
-                // If data is neither an array nor an object, consider it as no connection
-                return true;
-              }).length
-                }`}
-            </div>
           </div>
           <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
             <h6 style={{ marginBottom: '10px' }}>View:</h6>
@@ -1553,14 +1665,36 @@ export default function Home() {
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
-              <div>Mesh Peers: {containerData[selectedContainer]?.meshPeers?.length}</div>
+              <div>Mesh Peers:</div>
+              {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
+                <div>
+                    {Object.entries(containerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
+                      <div key={topic} style={{ marginLeft: '1rem'}}>
+                        {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div>No mesh peers available for topics.</div>
+              )}
               <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div>
               <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div>
-              <div>Subscribers: {containerData[selectedContainer]?.subscribers?.length}</div>
+              <div>Subscribers</div>
+              {Object.keys(containerData[selectedContainer]?.subscribersList || {}).length > 0 ? (
+                <div>
+                    {Object.entries(containerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
+                      <div key={topic} style={{ marginLeft: '1rem'}}>
+                        {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div>No mesh peers available for topics.</div>
+              )}
               <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
               <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
-              <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index}>{p}</p>)}</div>
-              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index}>{p}</p>)}</div>
+              <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
+              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
               <div>Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}</div>
             </div>
           )}
@@ -1675,7 +1809,11 @@ export default function Home() {
           text-overflow: ellipsis;
         }
 
-        .protocol-list button {
+        .selection-list {
+          width: 100%;
+        }
+
+        .selection-list button {
           padding: 5px 10px;
           font-size: 14px;
           cursor: pointer;
@@ -1685,22 +1823,22 @@ export default function Home() {
           color: white;
         }
 
-        .protocol-list button:hover {
+        .selection-list button:hover {
           background-color: #005bb5;
         }
 
-        .protocol-list ul {
+        .selection-list ul {
           list-style-type: none;
           padding-left: 0;
           max-height: 200px;
           overflow-y: auto;
         }
 
-        .protocol-list li {
+        .selection-list li {
           margin-bottom: 5px;
         }
 
-        .protocol-list label {
+        .selection-list label {
           cursor: pointer;
         }
 

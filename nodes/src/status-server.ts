@@ -24,15 +24,16 @@ interface RTTs {
   [key: string]: number
 }
 
+type TopicPeerMap = Record<string, string[]>
+
 export interface Update {
   containerId?: string
   peerId?: string,
   type?: string
-  topic?: string
-  subscribers?: string[],
+  subscribersList?: TopicPeerMap,
   pubsubPeers?: string[],
-  meshPeers?: string[],
-  fanoutList?: Map<TopicStr, Set<PeerIdStr>>
+  meshPeersList?: TopicPeerMap,
+  fanoutList?: Map<string, Set<string>>,
   libp2pPeers?: string[],
   connections?: string[],
   protocols?: string[],
@@ -50,13 +51,12 @@ export class StatusServer {
   private server: Libp2pType
   private type: string
   private peerId: PeerId
-  private topic: string
+  private topics: string[]
   private containerId: string = ''
 
   // libp2p
   private lastPeerId: string = ''
   private lastType: string = ''
-  private lastTopic: string  = ''
   private lastLibp2pPeers: string[] = []
   private lastConnections: string[] = []
   private lastProtocols: string[] = []
@@ -66,10 +66,10 @@ export class StatusServer {
 
   // pubsub
   private lastTopics: string[] = []
-  private lastSubscribers: string[] = []
+  private lastSubscribersList: TopicPeerMap = {}
   private lastPubsubPeers: string[] = []
-  private lastMeshPeers: string[] = []
-  private lastFanoutList: Map<TopicStr, Set<PeerIdStr>> = new Map<TopicStr, Set<PeerIdStr>>()
+  private lastMeshPeersList: TopicPeerMap = {}
+  private lastFanoutList: Map<string, Set<string>> = new Map<string, Set<string>>()
   private lastMessage: string = ''
   private lastPeerScores: PeerScores = {}
   private _message: string = ''
@@ -86,11 +86,11 @@ export class StatusServer {
   private updatesBeforeFullData: number = 100 // (this.updateIntervalMs * 100) // 10s
   private rttUpdateIntervalMs: number = 1000
 
-  constructor(server: Libp2pType, type: string, topic: string) {
+  constructor(server: Libp2pType, type: string, topics: string[]) {
     this.server = server
     this.type = type
     this.peerId = server.peerId
-    this.topic = topic
+    this.topics = topics
 
     this.wssAlive = false
     this.started = false
@@ -118,7 +118,8 @@ export class StatusServer {
   }
 
   private handlePubsubMessageEvent = async (evt: CustomEvent) => {
-    if (evt.detail.topic !== this.topic) {
+    if (!this.topics.includes(evt.detail.topic)) {
+      console.log('unknown topic', evt.detail.topic)
       return
     }
 
@@ -167,6 +168,7 @@ export class StatusServer {
             await self.sendUpdate(update)
             break
           }
+
           case 'info': {
             console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
 
@@ -177,12 +179,16 @@ export class StatusServer {
             ws.send(JSON.stringify(update))
             break;
           }
+
           case 'publish': {
             self.message = newMessage.message
             self.lastMessage = newMessage.message
+            const topic = newMessage.topic
+            console.log('publish msg', newMessage)
 
             try {
-              self.server.services.pubsub.publish(self.topic, fromString(newMessage.message))
+              const res = await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
+              console.log('publish res', res)
               const update: Update = {
                 lastMessage: newMessage.message
               }
@@ -190,15 +196,17 @@ export class StatusServer {
             } catch (e) {
               console.log(e)
             }
+
             break;
           }
+
           default:
             console.log('unknown message type', newMessage.type)
             break;
         }
       });
 
-      ws.send(JSON.stringify(await self.newUpdate()))
+      ws.send(JSON.stringify(await self.deltaUpdate()))
       self.scheduleUpdate = self.scheduleUpdates()
     })
 
@@ -217,7 +225,36 @@ export class StatusServer {
     this._message = message
   }
 
-  private newUpdate = async (): Promise<Update> => {
+  private getAllSubscribersAllTopics = (): TopicPeerMap => {
+    const topics = this.server.services.pubsub.getTopics()
+
+    const subscribersList: TopicPeerMap = {}
+
+    topics.forEach((topic) => {
+      const subscriberList = this.server.services.pubsub.getSubscribers(topic)
+      const subscribers = subscriberList.map((peerId: PeerId) => peerId.toString())
+
+      subscribersList[topic] = subscribers
+    })
+
+    return subscribersList
+  }
+
+  private getAllMeshPeersAllTopics = (): TopicPeerMap => {
+    const topics = this.server.services.pubsub.getTopics()
+
+    const meshPeersList: TopicPeerMap = {}
+
+    topics.forEach((topic) => {
+      const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(topic)
+      const meshPeers = meshPeerList.map((peer: PeerIdStr) => peer)
+      meshPeersList[topic] = meshPeers
+    })
+
+    return meshPeersList
+  }
+
+  private deltaUpdate = async (): Promise<Update> => {
     const update: Update = {}
 
     // libp2p
@@ -234,11 +271,11 @@ export class StatusServer {
 
     }
 
-    const topic = this.topic
-    if (topic !== this.lastTopic) {
-      this.lastTopic = topic
-      update.topic = topic
-    }
+    // const topics = this.topics
+    // if (topics !== this.lastTopics) {
+    //   this.lastTopics = topics
+    //   update.topics = topics
+    // }
 
     const libp2pPeerList = await this.server.peerStore.all()
     const libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
@@ -275,19 +312,21 @@ export class StatusServer {
     }
 
     // pubsub
+    // pubsub topics
     const topics = this.server.services.pubsub.getTopics()
     if (!isEqual(topics, this.lastTopics)) {
       this.lastTopics = topics
       update.topics = topics
     }
 
-    const subscriberList = this.server.services.pubsub.getSubscribers(this.topic)
-    const subscribers = subscriberList.map((peerId: PeerId) => peerId.toString())
-    if (!isEqual(subscribers, this.lastSubscribers)) {
-      this.lastSubscribers = subscribers
-      update.subscribers = subscribers
+    // pubsub topic subscribers
+    const subscribersList = this.getAllSubscribersAllTopics()
+    if (!isEqual(subscribersList, this.lastSubscribersList)) {
+      this.lastSubscribersList = subscribersList
+      update.subscribersList = subscribersList
     }
 
+    // pubsub peers
     const pubsubPeerList = this.server.services.pubsub.getPeers()
     const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
     if (!isEqual(pubsubPeers, this.lastPubsubPeers)) {
@@ -295,25 +334,28 @@ export class StatusServer {
       update.pubsubPeers = pubsubPeers
     }
 
-    const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(this.topic)
-    const meshPeers = meshPeerList.map((peer: PeerIdStr) => peer)
-    if (!isEqual(meshPeers, this.lastMeshPeers)) {
-      this.lastMeshPeers = meshPeers
-      update.meshPeers = meshPeers
+    // pubsub mesh peers
+    const meshPeersList = this.getAllMeshPeersAllTopics()
+    if (!isEqual(meshPeersList, this.lastMeshPeersList)) {
+      this.lastMeshPeersList = meshPeersList
+      update.meshPeersList = meshPeersList
     }
 
+    // gossipsub fanout peers
     const fanoutList = (this.server.services.pubsub as GossipSub).fanout
     if (!isEqual(fanoutList, this.lastFanoutList)) {
-      this.lastFanoutList= fanoutList
+      this.lastFanoutList = fanoutList
       update.fanoutList = fanoutList
     }
 
+    // gossipsub peer scores
     const peerScores = this.getPeerScores()
     if (!isEqual(peerScores, this.lastPeerScores)) {
       this.lastPeerScores = peerScores
       update.peerScores = peerScores
     }
 
+    // Round trip times
     const rtts = this.getRTTs()
     if (!isEqual(rtts, this.lastRTTs)) {
       this.lastRTTs = rtts
@@ -350,9 +392,9 @@ export class StatusServer {
     this.lastType = type
     update.type = type
 
-    const topic = this.topic
-    this.lastTopic = topic
-    update.topic = topic
+    // const topic = this.topic
+    // this.lastTopic = topic
+    // update.topic = topic
 
     const libp2pPeerList = await this.server.peerStore.all()
     const libp2pPeers = libp2pPeerList.map((peer) => peer.id.toString())
@@ -382,23 +424,21 @@ export class StatusServer {
     this.lastTopics = topics
     update.topics = topics
 
-    const subscriberList = this.server.services.pubsub.getSubscribers(this.topic)
-    const subscribers = subscriberList.map((peerId: PeerId) => peerId.toString())
-    this.lastSubscribers = subscribers
-    update.subscribers = subscribers
+    const subscribersList = this.getAllSubscribersAllTopics()
+    this.lastSubscribersList = subscribersList
+    update.subscribersList = subscribersList
 
     const pubsubPeerList = this.server.services.pubsub.getPeers()
     const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
     this.lastPubsubPeers = pubsubPeers
     update.pubsubPeers = pubsubPeers
 
-    const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(this.topic)
-    const meshPeers = meshPeerList.map((peer: PeerIdStr) => peer)
-    this.lastMeshPeers = meshPeers
-    update.meshPeers = meshPeers
+    const meshPeersList = this.getAllMeshPeersAllTopics()
+    this.lastMeshPeersList = meshPeersList
+    update.meshPeersList = meshPeersList
 
     const fanoutList = (this.server.services.pubsub as GossipSub).fanout
-    this.lastFanoutList= fanoutList
+    this.lastFanoutList = fanoutList
     update.fanoutList = fanoutList
 
     this.lastPeerScores = this.getPeerScores()
@@ -421,7 +461,7 @@ export class StatusServer {
   }
 
   private sendUpdate = async (update: Update) => {
-    if (update.type || update.topic || update.subscribers || update.pubsubPeers || update.meshPeers || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores) {
+    if (update.type || update.subscribersList || update.pubsubPeers || update.meshPeersList || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores) {
       update.containerId = this.containerId
 
       this.wss.clients.forEach((ws) => {
@@ -441,9 +481,10 @@ export class StatusServer {
       if (this.updateCount >= this.updatesBeforeFullData) {
         this.updateCount = 0
         const update = await this.fullUpdate()
+        // console.log('full update', update)
         await this.sendUpdate(update)
       } else {
-        const update = await this.newUpdate()
+        const update = await this.deltaUpdate()
         await this.sendUpdate(update)
       }
     }, this.updateIntervalMs)

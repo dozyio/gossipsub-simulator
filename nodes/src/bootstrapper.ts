@@ -30,9 +30,11 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       port = process.env.PORT
     }
 
-    let topic = 'pubXXX-dev'
-    if (process.env.TOPIC !== undefined) {
-      topic = process.env.TOPIC
+    let topics: string[] = []
+    if (process.env.TOPICS !== undefined) {
+      topics = process.env.TOPICS.split(",")
+    } else {
+      console.log("TOPICS env not set")
     }
 
     let dhtPrefix = 'local'
@@ -92,8 +94,8 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
 
         topicScoreCap: topicScoreCap,
 
-        topics: {
-          [topic]: createTopicScoreParams({
+        topics: topics.reduce((acc, topic) => {
+          acc[topic] = createTopicScoreParams({
             topicWeight: topicWeight,
 
             // P1
@@ -121,8 +123,9 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
             // P4
             invalidMessageDeliveriesWeight: 0,
             // invalidMessageDeliveriesDecay: 0,
-          })
-        }
+          });
+          return acc;
+        }, {} as Record<string, ReturnType<typeof createTopicScoreParams>>), // Map topics to params
       }),
       scoreThresholds: {
         gossipThreshold: gossipScoreThreshold,
@@ -200,11 +203,14 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
     await server.services.lanDHT.setMode("server")
 
     // Subscribe to topic
-    server.services.pubsub.subscribe(topic)
+    for (let i = 0; i < topics.length; i++) {
+      server.services.pubsub.subscribe(topics[i])
+    }
+
 
     // Initialize StatusServer
     const type = 'bootstrapper'
-    const statusServer = new StatusServer(server, type, topic)
+    const statusServer = new StatusServer(server, type, topics)
 
     // // Listen for pubsub messages
     // server.services.pubsub.addEventListener('message', (evt) => {

@@ -78,6 +78,7 @@ type NetworkConfig struct {
 type ContainerWSReq struct {
 	MType   string `json:"mType"`
 	Message string `json:"message"`
+	Topic   string `json:"topic,omitempty"`
 }
 
 func listContainers() ([]ContainerInfo, error) {
@@ -328,6 +329,8 @@ func createAndStartContainer(imageName, containerName string, containerPort int,
 	labels := map[string]string{
 		"managed_by": appLabel,
 	}
+
+	// fmt.Printf("env: %v\n", env)
 
 	config := &container.Config{
 		Image:        imageName,
@@ -756,6 +759,7 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 		Env      []string `json:"env,omitempty"`
 		Hostname string   `json:"hostname,omitempty"`
 	}
+
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
@@ -863,6 +867,7 @@ func getRandomColorV2() string {
 func publishHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		Amount      int    `json:"amount"`
+		Topic       string `json:"topic,omitempty"`
 		ContainerID string `json:"containerId,omitempty"`
 	}
 
@@ -903,6 +908,7 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		message := &ContainerWSReq{
 			MType:   "publish",
 			Message: getRandomColorV2(),
+			Topic:   reqBody.Topic,
 		}
 
 		msg, err := json.Marshal(message)
