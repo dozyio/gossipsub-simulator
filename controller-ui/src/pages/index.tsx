@@ -1647,6 +1647,28 @@ export default function Home() {
                   style={{ width: '5em' }}
                 /> ms
               </label>
+              <div className="selection-list">
+                {topics.length > 0 ? (
+                  <div>
+                    <ul>
+                      {[...topics].sort().map((topic, index) => (
+                        <li key={index}>
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={selectedTopic === topic}
+                              onChange={() => handleTopicSelect(topic)}
+                            />
+                            {topic}
+                          </label>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : (
+                  <p>No topics available.</p>
+                )}
+              </div>
             </div>
           )}
           <button onClick={() => publishToTopic('', 1)}>Publish to random peer</button>

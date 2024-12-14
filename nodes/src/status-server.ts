@@ -24,16 +24,16 @@ interface RTTs {
   [key: string]: number
 }
 
-type TopicPeerMap = Record<string, string[]>
+type TopicsPeers = Record<string, string[]>
 
 export interface Update {
   containerId?: string
   peerId?: string,
   type?: string
-  subscribersList?: TopicPeerMap,
+  subscribersList?: TopicsPeers,
   pubsubPeers?: string[],
-  meshPeersList?: TopicPeerMap,
-  fanoutList?: Map<string, Set<string>>,
+  meshPeersList?: TopicsPeers,
+  fanoutList?: TopicsPeers,
   libp2pPeers?: string[],
   connections?: string[],
   protocols?: string[],
@@ -66,10 +66,10 @@ export class StatusServer {
 
   // pubsub
   private lastTopics: string[] = []
-  private lastSubscribersList: TopicPeerMap = {}
+  private lastSubscribersList: TopicsPeers = {}
   private lastPubsubPeers: string[] = []
-  private lastMeshPeersList: TopicPeerMap = {}
-  private lastFanoutList: Map<string, Set<string>> = new Map<string, Set<string>>()
+  private lastMeshPeersList: TopicsPeers = {}
+  private lastFanoutList: TopicsPeers = {}
   private lastMessage: string = ''
   private lastPeerScores: PeerScores = {}
   private _message: string = ''
@@ -187,8 +187,7 @@ export class StatusServer {
             console.log('publish msg', newMessage)
 
             try {
-              const res = await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
-              console.log('publish res', res)
+              await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
               const update: Update = {
                 lastMessage: newMessage.message
               }
@@ -225,10 +224,10 @@ export class StatusServer {
     this._message = message
   }
 
-  private getAllSubscribersAllTopics = (): TopicPeerMap => {
+  private getAllSubscribersAllTopics = (): TopicsPeers => {
     const topics = this.server.services.pubsub.getTopics()
 
-    const subscribersList: TopicPeerMap = {}
+    const subscribersList: TopicsPeers = {}
 
     topics.forEach((topic) => {
       const subscriberList = this.server.services.pubsub.getSubscribers(topic)
@@ -240,10 +239,10 @@ export class StatusServer {
     return subscribersList
   }
 
-  private getAllMeshPeersAllTopics = (): TopicPeerMap => {
+  private getAllMeshPeersAllTopics = (): TopicsPeers => {
     const topics = this.server.services.pubsub.getTopics()
 
-    const meshPeersList: TopicPeerMap = {}
+    const meshPeersList: TopicsPeers = {}
 
     topics.forEach((topic) => {
       const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(topic)
@@ -252,6 +251,16 @@ export class StatusServer {
     })
 
     return meshPeersList
+  }
+
+  private getFanoutPeers = (): TopicsPeers => {
+    let topicsPeers: TopicsPeers = {};
+
+    (this.server.services.pubsub as GossipSub).fanout.forEach((v: Set<string>, k: string) => {
+      topicsPeers[k] = Array.from(v)
+    })
+
+    return topicsPeers
   }
 
   private deltaUpdate = async (): Promise<Update> => {
@@ -342,7 +351,7 @@ export class StatusServer {
     }
 
     // gossipsub fanout peers
-    const fanoutList = (this.server.services.pubsub as GossipSub).fanout
+    const fanoutList = this.getFanoutPeers()
     if (!isEqual(fanoutList, this.lastFanoutList)) {
       this.lastFanoutList = fanoutList
       update.fanoutList = fanoutList
@@ -437,7 +446,7 @@ export class StatusServer {
     this.lastMeshPeersList = meshPeersList
     update.meshPeersList = meshPeersList
 
-    const fanoutList = (this.server.services.pubsub as GossipSub).fanout
+    const fanoutList = this.getFanoutPeers()
     this.lastFanoutList = fanoutList
     update.fanoutList = fanoutList
 
