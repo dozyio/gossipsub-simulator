@@ -8,8 +8,7 @@ import { webSockets } from '@libp2p/websockets'
 import { tcp } from '@libp2p/tcp'
 import * as filters from '@libp2p/websockets/filters'
 import { createLibp2p } from 'libp2p'
-import { toString } from 'uint8arrays'
-import { kadDHT, removePublicAddressesMapper } from '@libp2p/kad-dht'
+import { kadDHT } from '@libp2p/kad-dht'
 import { ping } from '@libp2p/ping'
 import { applicationScore, removePublicAddressesLoopbackAddressesMapper } from './helpers'
 import { Libp2pType } from './types'
@@ -17,7 +16,7 @@ import { StatusServer } from './status-server'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
 import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts'
-import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
+import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 
 (async () => {
   try {
@@ -86,6 +85,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
           Dout: DOUT,
           doPX: false,
           emitSelf: false,
+          globalSignaturePolicy: 'StrictSign',
           allowPublishToZeroTopicPeers: true, // don't throw if no peers
           pruneBackoff: 60 * 1000,
           scoreParams: createPeerScoreParams({

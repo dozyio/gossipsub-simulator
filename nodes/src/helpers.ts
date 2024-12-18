@@ -1,9 +1,10 @@
 import { peerIdFromString } from '@libp2p/peer-id'
-import { type PeerId, PeerInfo, Ed25519PrivateKey } from '@libp2p/interface'
+import { type PeerId, PeerInfo, Ed25519PrivateKey, SignedMessage, Message } from '@libp2p/interface'
 import { Multiaddr, multiaddr } from '@multiformats/multiaddr'
 import { bootstrapper1PeerId, bootstrapper2PeerId } from './consts';
 import { keys } from '@libp2p/crypto'
 import { isPrivateIp } from '@libp2p/utils/private-ip'
+import { sha256 } from 'multiformats/hashes/sha2'
 
 export const isEqual = (a: unknown, b: unknown): boolean => {
   if (a === b) return true;

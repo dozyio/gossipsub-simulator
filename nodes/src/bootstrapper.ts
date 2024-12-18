@@ -7,7 +7,7 @@ import { yamux } from '@chainsafe/libp2p-yamux'
 import { identify } from '@libp2p/identify'
 import { tcp } from '@libp2p/tcp'
 import { Libp2pOptions, createLibp2p } from 'libp2p'
-import { applicationScore, generateKeyPair, removePublicAddressesLoopbackAddressesMapper } from './helpers'
+import { applicationScore, generateKeyPair, msgIdFnStrictNoSign, removePublicAddressesLoopbackAddressesMapper } from './helpers'
 import { ping } from '@libp2p/ping'
 import { toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
@@ -77,6 +77,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       Dout: DOUT,
       doPX: true,
       emitSelf: false,
+      globalSignaturePolicy: 'StrictSign',
       allowPublishToZeroTopicPeers: true, // don't throw if no peers
       scoreParams: createPeerScoreParams({
         // P5
