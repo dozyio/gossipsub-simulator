@@ -1,8 +1,8 @@
 import { PeerId } from '@libp2p/interface'
-import { Libp2pType } from './types'
+import { Libp2pType } from './types.js'
 import { WebSocketServer } from 'ws';
 import { isEqual } from './helpers.js';
-import { PeerIdStr, TopicStr } from '@chainsafe/libp2p-gossipsub/types';
+import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
 import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
