@@ -7,11 +7,10 @@ WORKDIR /app
 RUN apk add --no-cache iproute2 iptables
 
 COPY package.json package-lock.json ./
+COPY src ./src
+COPY dist ./dist
 
-## copy deps so we can add debugging
+## install deps so native binaries are in the correct format
+RUN npm ci
 
-COPY . .
-
-# RUN npm ci
-
-ENTRYPOINT [ "node", "dist/bootstrapper.cjs" ]
+ENTRYPOINT [ "node", "dist/bootstrapper.js" ]
