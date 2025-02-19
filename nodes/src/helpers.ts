@@ -133,6 +133,6 @@ export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo) => 
 
   return {
     ...peer,
-    multiAddrs: newMultiaddrs
+    multiaddrs: newMultiaddrs
   }
 }
