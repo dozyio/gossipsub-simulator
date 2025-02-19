@@ -103,7 +103,7 @@ export const generateKeyPair = async (seed: string): Promise<Ed25519PrivateKey> 
 }
 
 // Define mapper to remove loopback addresses
-export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo) => {
+export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo): PeerInfo => {
   const newMultiaddrs = peer.multiaddrs.filter(multiaddr => {
     const tuples = multiaddr.stringTuples()
     if (tuples.length === 0) return false
@@ -133,6 +133,6 @@ export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo) => 
 
   return {
     ...peer,
-    multiAddrs: newMultiaddrs
+    multiaddrs: newMultiaddrs
   }
 }
