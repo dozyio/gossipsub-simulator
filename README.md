@@ -34,6 +34,12 @@ make ui
 make controller
 ```
 
+If the controller fails to run, you may need to set the path to the docker socket:
+
+```sh
+DOCKER_HOST=unix:///Users/YOU_USERNAME/.docker/run/docker.sock make controller
+```
+
 ### Stop
 
 ```sh
