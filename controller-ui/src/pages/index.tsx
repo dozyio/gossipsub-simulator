@@ -1853,7 +1853,7 @@ export default function Home() {
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
-              <div>Connect+perf:  {containerData[selectedContainer]?.connectTime}ms</div>
+              <div>Connect+perf:  {Math.round(containerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
                 <div>
