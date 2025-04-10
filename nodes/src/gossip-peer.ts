@@ -17,6 +17,7 @@ import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
 import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts.js'
 import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
+import { perf } from '@libp2p/perf'
 
 (async () => {
   try {
@@ -26,6 +27,12 @@ import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p
     } else {
       console.log("TOPICS env not set")
     }
+
+    let perfBytes = 0
+    if (process.env.PERF !== undefined) {
+      perfBytes = Number(process.env.PERF)
+    }
+
 
     let dhtPrefix = 'local'
     if (process.env.DHTPREFIX !== undefined) {
@@ -78,6 +85,7 @@ import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p
       services: {
         identify: identify(),
         ping: ping(),
+        perf: perf(),
         pubsub: gossipsub({
           D: D,
           Dlo: DLO,
@@ -161,9 +169,10 @@ import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p
       server.services.pubsub.subscribe(topics[i])
     }
 
+
     // Initialize StatusServer
     const type = 'gossip'
-    const statusServer = new StatusServer(server, type, topics)
+    const statusServer = new StatusServer(server, type, topics, perfBytes)
 
     console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 

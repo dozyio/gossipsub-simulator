@@ -127,9 +127,9 @@ func broadcastContainers() {
 		fmt.Printf("Failed to list containers for broadcast: %v\n", err)
 		return
 	}
-	fmt.Printf("Broadcasting %d containers\n", len(containerInfos))
+	// fmt.Printf("Broadcasting %d containers\n", len(containerInfos))
 
-	message := map[string]interface{}{
+	message := map[string]any{
 		"mType": "containerList",
 		"data":  containerInfos,
 	}
@@ -514,7 +514,7 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 }
 
 func addTypeToMessage(msg []byte, msgType string) ([]byte, error) {
-	var original map[string]interface{}
+	var original map[string]any
 	err := json.Unmarshal(msg, &original)
 	if err != nil {
 		return nil, err
@@ -804,7 +804,7 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"container_id": containerID,
 		"host_port":    hostPort,
 	})

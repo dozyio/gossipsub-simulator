@@ -16,6 +16,7 @@ import { StatusServer } from './status-server.js'
 import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts.js'
 import { Libp2pType } from './types.js'
 import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
+import { perf } from '@libp2p/perf'
 
 (async () => {
   try {
@@ -182,12 +183,13 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
       services: {
         identify: identify(),
         ping: ping(),
+        perf: perf(),
         pubsub: gossipsub(gossipsubConfig),
         lanDHT: kadDHT({
           protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
           clientMode: false,
           peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
-          allowQueryWithZeroPeers: true,
+          // allowQueryWithZeroPeers: true,
           // initialQuerySelfInterval: 0,
           // networkDialTimeout: {
           //   minTimeout: 10_000,
@@ -210,7 +212,7 @@ import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams 
 
     // Initialize StatusServer
     const type = 'bootstrapper'
-    const statusServer = new StatusServer(server, type, topics)
+    const statusServer = new StatusServer(server, type, topics, 0) // TODO perfBytes
 
     // // Listen for pubsub messages
     // server.services.pubsub.addEventListener('message', (evt) => {

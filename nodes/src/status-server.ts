@@ -7,7 +7,7 @@ import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
-import { RoutingTable, SingleKadDHT } from '@libp2p/kad-dht'
+import { SingleKadDHT } from '@libp2p/kad-dht'
 
 interface Stream {
   protocol: string,
@@ -46,6 +46,7 @@ export interface Update {
   lastMessage?: string,
   peerScores?: PeerScores,
   rtts?: RTTs
+  connectTime?: number
 }
 
 export class StatusServer {
@@ -55,6 +56,7 @@ export class StatusServer {
   private peerId: PeerId
   private topics: string[]
   private containerId: string = ''
+  private perfBytes: number = 0
 
   // libp2p
   private lastPeerId: string = ''
@@ -79,6 +81,10 @@ export class StatusServer {
   // dht
   private lastDhtPeers: string[] = []
 
+  // perf
+  private connectTime: number = 0
+  private lastConnectTime: number = 0
+
   private wss: WebSocketServer
   private wssAlive: boolean
   private started: boolean
@@ -88,11 +94,12 @@ export class StatusServer {
   private updatesBeforeFullData: number = 100 // (this.updateIntervalMs * 100) // 10s
   private rttUpdateIntervalMs: number = 1000
 
-  constructor(server: Libp2pType, type: string, topics: string[]) {
+  constructor(server: Libp2pType, type: string, topics: string[], perfBytes: number) {
     this.server = server
     this.type = type
     this.peerId = server.peerId
     this.topics = topics
+    this.perfBytes = perfBytes
 
     this.wssAlive = false
     this.started = false
@@ -212,7 +219,19 @@ export class StatusServer {
             try {
               const ma = multiaddr(newMessage.message)
               console.log('dialing', ma)
+              const start = process.hrtime();
               await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
+              if (self.perfBytes) {
+                try {
+                  for await (const output of self.server.services.perf.measurePerformance(ma, self.perfBytes, self.perfBytes)) {
+                    console.log('perf', output)
+                  }
+                } catch (err: any) {
+                  console.error('Error measuring performance:', err)
+                }
+              }
+              const [seconds, nanoseconds] = process.hrtime(start);
+              self.connectTime = seconds * 1000 + nanoseconds / 1e6;
               console.log('dialed', ma)
             } catch (e) {
               console.log(e)
@@ -408,6 +427,9 @@ export class StatusServer {
       update.dhtPeers = dhtPeers
     }
 
+    if (!isEqual(this.connectTime, this.lastConnectTime)) {
+      update.connectTime = this.connectTime
+    }
     return update
   }
 
@@ -488,11 +510,15 @@ export class StatusServer {
     this.lastDhtPeers = dhtPeers
     update.dhtPeers = dhtPeers
 
+    // perf connect
+    this.lastConnectTime = this.connectTime
+    update.connectTime = this.lastConnectTime
+
     return update
   }
 
   private sendUpdate = async (update: Update) => {
-    if (update.type || update.subscribersList || update.pubsubPeers || update.meshPeersList || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores) {
+    if (update.type || update.subscribersList || update.pubsubPeers || update.meshPeersList || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores || update.rtts || update.connectTime) {
       update.containerId = this.containerId
 
       this.wss.clients.forEach((ws) => {

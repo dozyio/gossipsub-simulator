@@ -57,6 +57,7 @@ interface ContainerData {
   lastMessage: string;
   peerScores: PeerScores;
   rtts: RRTs;
+  connectTime: number
   x: number; // Position X
   y: number; // Position Y
   vx: number; // Velocity X
@@ -138,6 +139,8 @@ export default function Home() {
   const [maxLatency, setMaxLatency] = useState<string>('300');
   const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false);
   const [packetLoss, setPacketLoss] = useState<string>('10');
+  const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
+  const [perfBytes, setPerfBytes] = useState<string>('1')
 
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([]);
@@ -185,6 +188,7 @@ export default function Home() {
             lastMessage: '',
             peerScores: {},
             rtts: {},
+            connectTime: -1,
             x,
             y,
             vx: 0,
@@ -265,6 +269,10 @@ export default function Home() {
         env.push(`GOSSIP_DHI=${gossipDhi}`);
         env.push(`GOSSIP_DOUT=${gossipDout}`);
       }
+    }
+
+    if (hasPerfSetting && perfBytes) {
+      env.push(`PERF=${perfBytes}`)
     }
 
     return env
@@ -1341,6 +1349,32 @@ export default function Home() {
               </div>
             </div>
           )}
+          <div className="input-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={hasPerfSetting}
+                onChange={() => setHasPerfSetting(!hasPerfSetting)}
+              />
+              <span style={{ marginLeft: '5px' }}>
+                Run Perf on connect
+              </span>
+            </label>
+          </div>
+          {hasPerfSetting && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
+              <div className="input-group">
+                <label>
+                  Bytes: 
+                  <input
+                    value={perfBytes}
+                    onChange={(e) => setPerfBytes(e.target.value)}
+                    style={{ width: '4em' }}
+                  />
+                </label>
+              </div>
+            </div>
+          )}
 
           <h3>Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -1819,6 +1853,7 @@ export default function Home() {
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
+              <div>Connect+perf:  {containerData[selectedContainer]?.connectTime}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
                 <div>
@@ -1831,8 +1866,8 @@ export default function Home() {
               ) : (
                 <div>No mesh peers available for topics.</div>
               )}
-              <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div>
-              <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div>
+              {/* <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div> */}
+              {/* <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div> */}
               <div>Subscribers</div>
               {Object.keys(containerData[selectedContainer]?.subscribersList || {}).length > 0 ? (
                 <div>
@@ -1845,10 +1880,10 @@ export default function Home() {
               ) : (
                 <div>No mesh peers available for topics.</div>
               )}
+              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
               <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
               <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
               <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
-              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
               <div>Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}</div>
             </div>
           )}
