@@ -1,0 +1,16 @@
+FROM node:23-alpine
+
+WORKDIR /app
+
+## adding iproute2/iptables allow us to simulate network delay by running
+## tc qdisc add dev eth0 root netem delay 100ms
+RUN apk add --no-cache iproute2 iptables
+
+COPY package.json package-lock.json ./
+COPY src ./src
+COPY dist ./dist
+
+## install deps so native binaries are in the correct format
+RUN npm ci
+
+ENTRYPOINT [ "node", "dist/minimal-peer.js" ]

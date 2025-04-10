@@ -4,6 +4,7 @@ NETWORK:=p2p-net
 
 build:
 	cd nodes && make build
+	cd legacy-nodes && make build
 
 ui:
 	cd controller-ui && npm run dev

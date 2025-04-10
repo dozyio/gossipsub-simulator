@@ -2,12 +2,8 @@ import { PeerId } from '@libp2p/interface'
 import { Libp2pType } from './types.js'
 import { WebSocketServer } from 'ws';
 import { isEqual } from './helpers.js';
-import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
-import { GossipSub } from '@chainsafe/libp2p-gossipsub';
-import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
-import { SingleKadDHT } from '@libp2p/kad-dht'
 
 interface Stream {
   protocol: string,
@@ -24,12 +20,6 @@ interface PeerScores {
 
 interface RTTs {
   [key: string]: number
-}
-
-interface KadPeer {
-  kadId: Uint8Array
-  peerId: PeerId
-  lastPing: number
 }
 
 type TopicsPeers = Record<string, string[]>
@@ -117,9 +107,6 @@ export class StatusServer {
     server.addEventListener('connection:close', this.handleConnectionEvent)
     server.addEventListener('connection:prune', this.handleConnectionEvent)
     server.addEventListener('self:peer:update', this.handleSelfPeerUpdate)
-    if (server.services.pubsub) {
-      server.services.pubsub.addEventListener('message', this.handlePubsubMessageEvent)
-    }
 
     this.rttSetup()
     this.started = true
@@ -156,20 +143,7 @@ export class StatusServer {
   }
 
   private getPeerScores = (): PeerScores => {
-    if (!this.server.services.pubsub) {
-      return {}
-    }
-
-    const pubsubPeerList = this.server.services.pubsub.getPeers()
-    const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
-
-    let peerScores: PeerScores = {}
-    for (const peer of pubsubPeers) {
-      // console.log(`Peerscore: ${peer}: ${(this.server.services.pubsub as GossipSub).getScore(peer)}`)
-      peerScores[peer] = (this.server.services.pubsub as GossipSub).getScore(peer)
-    }
-
-    return peerScores
+    return {}
   }
 
   private wssSetup = (wss: WebSocketServer) => {
@@ -197,8 +171,6 @@ export class StatusServer {
           }
 
           case 'info': {
-            // console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
-
             const update: Partial<Update> = {}
             self.lastPeerScores = self.getPeerScores()
             update.peerScores = self.lastPeerScores
@@ -208,23 +180,6 @@ export class StatusServer {
           }
 
           case 'publish': {
-            self.message = newMessage.message
-            self.lastMessage = newMessage.message
-            const topic = newMessage.topic
-            console.log('publish msg', newMessage)
-
-            if (self.server.services.pubsub) {
-              try {
-                await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
-                const update: Update = {
-                  lastMessage: newMessage.message
-                }
-                await self.sendUpdate(update)
-              } catch (e) {
-                console.log(e)
-              }
-            }
-
             break;
           }
 
@@ -235,7 +190,7 @@ export class StatusServer {
               console.log('dialing', ma)
               const start = process.hrtime();
               await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
-              if (self.perfBytes && self.server.services.perf) {
+              if (self.perfBytes) {
                 try {
                   for await (const output of self.server.services.perf.measurePerformance(ma, self.perfBytes, self.perfBytes)) {
                     console.log('perf', output)
@@ -280,79 +235,15 @@ export class StatusServer {
   }
 
   private getAllSubscribersAllTopics = (): TopicsPeers => {
-    if (!this.server.services.pubsub) {
-      return {}
-    }
-
-    const topics = this.server.services.pubsub.getTopics()
-
-    const subscribersList: TopicsPeers = {}
-
-    topics.forEach((topic) => {
-      const subscriberList = this.server.services.pubsub.getSubscribers(topic)
-      const subscribers = subscriberList.map((peerId: PeerId) => peerId.toString())
-
-      subscribersList[topic] = subscribers
-    })
-
-    return subscribersList
+    return {}
   }
 
   private getAllMeshPeersAllTopics = (): TopicsPeers => {
-    if (!this.server.services.pubsub) {
-      return {}
-    }
-
-    const topics = this.server.services.pubsub.getTopics()
-
-    const meshPeersList: TopicsPeers = {}
-
-    topics.forEach((topic) => {
-      const meshPeerList = (this.server.services.pubsub as GossipSub).getMeshPeers(topic)
-      const meshPeers = meshPeerList.map((peer: PeerIdStr) => peer)
-      meshPeersList[topic] = meshPeers
-    })
-
-    return meshPeersList
+    return {}
   }
 
   private getFanoutPeers = (): TopicsPeers => {
-    if (!this.server.services.pubsub) {
-      return {}
-    }
-
-    let topicsPeers: TopicsPeers = {};
-
-    (this.server.services.pubsub as GossipSub).fanout.forEach((v: Set<string>, k: string) => {
-      topicsPeers[k] = Array.from(v)
-    })
-
-    return topicsPeers
-  }
-
-  private getPubsubTopics = (): string[] => {
-    if (!this.server.services.pubsub) {
-      return []
-    }
-
-    return this.server.services.pubsub.getTopics()
-  }
-
-  private getPubsubPeers = (): PeerId[] => {
-    if (!this.server.services.pubsub) {
-      return []
-    }
-
-    return this.server.services.pubsub.getPeers()
-  }
-
-  private getDHTPeerList = (): KadPeer[] => {
-    if (!this.server.services.lanDHT) {
-      return []
-    }
-
-    // @ts-ignore-next-line
-    return[...(this.server.services.lanDHT as SingleKadDHT).routingTable.kb.toIterable()];
+    return {}
   }
 
   private deltaUpdate = async (): Promise<Update> => {
@@ -414,7 +305,7 @@ export class StatusServer {
 
     // pubsub
     // pubsub topics
-    const topics = this.getPubsubTopics()
+    const topics: string[] = []
     if (!isEqual(topics, this.lastTopics)) {
       this.lastTopics = topics
       update.topics = topics
@@ -428,8 +319,7 @@ export class StatusServer {
     }
 
     // pubsub peers
-    const pubsubPeerList = this.getPubsubPeers()
-    const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+    const pubsubPeers: string[] = []
     if (!isEqual(pubsubPeers, this.lastPubsubPeers)) {
       this.lastPubsubPeers = pubsubPeers
       update.pubsubPeers = pubsubPeers
@@ -470,8 +360,8 @@ export class StatusServer {
     // }
 
     // dht
-    const dhtPeerList = this.getDHTPeerList()
-    const dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
+    // @ts-ignore-next-line
+    const dhtPeers: string[] = []
     if (!isEqual(dhtPeers, this.lastDhtPeers)) {
       this.lastDhtPeers = dhtPeers
       update.dhtPeers = dhtPeers
@@ -523,7 +413,7 @@ export class StatusServer {
     update.multiaddrs = multiaddrs
 
     // pubsub
-    const topics = this.getPubsubTopics()
+    const topics: string[] = []
     this.lastTopics = topics
     update.topics = topics
 
@@ -531,8 +421,7 @@ export class StatusServer {
     this.lastSubscribersList = subscribersList
     update.subscribersList = subscribersList
 
-    const pubsubPeerList = this.getPubsubPeers()
-    const pubsubPeers = pubsubPeerList.map((peerId: PeerId) => peerId.toString())
+    const pubsubPeers: string[] = []
     this.lastPubsubPeers = pubsubPeers
     update.pubsubPeers = pubsubPeers
 
@@ -554,8 +443,7 @@ export class StatusServer {
     update.lastMessage = this.lastMessage
 
     // dht
-    const dhtPeerList = this.getDHTPeerList()
-    const dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
+    const dhtPeers: string[] = []
     this.lastDhtPeers = dhtPeers
     update.dhtPeers = dhtPeers
 
@@ -603,13 +491,14 @@ export class StatusServer {
   }
 
   private getRTTs = (): RTTs => {
-    const rtts: RTTs = {}
-
-    for (const conns of this.server.getConnections()) {
-      rtts[conns.remotePeer.toString()] = conns.rtt ?? -1
-    }
-
-    return rtts
+    return {}
+    // const rtts: RTTs = {}
+    //
+    // for (const conns of this.server.getConnections()) {
+    //   rtts[conns.remotePeer.toString()] = conns.rtt ?? -1
+    // }
+    //
+    // return rtts
   }
 
   private rttSetup = () => {
