@@ -112,7 +112,7 @@ export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo): Pe
       return false
     }
 
-    if (type !== 4 && type !== 6) { // Assuming 4 is IPv4 and 6 is IPv6
+    if (type !== 4 && type !== 6) {
       return false
     }
 

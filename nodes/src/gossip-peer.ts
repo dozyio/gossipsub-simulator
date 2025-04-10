@@ -147,7 +147,7 @@ import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p
         }),
         lanDHT: kadDHT({
           protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
-          clientMode: true,
+          // clientMode: true,
           peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
         }),
       }
@@ -165,7 +165,7 @@ import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p
     const type = 'gossip'
     const statusServer = new StatusServer(server, type, topics)
 
-    console.log('Gossip peerlistening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+    console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
     try {
       await server.dial(multiaddr(bootstrapper1Ma), { signal: AbortSignal.timeout(10_000) })

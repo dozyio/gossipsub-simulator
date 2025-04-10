@@ -412,8 +412,9 @@ func createAndStartContainer(imageName, containerName string, containerPort int,
 }
 
 func setContainerIDAndListen(hostPort int, containerID string) error {
-	const maxRetries = 5
-	const retryDelay = time.Second
+	// over 5 seconds
+	const maxRetries = 250
+	const retryDelay = 20 * time.Millisecond
 
 	var lastErr error
 	for i := 1; i <= maxRetries; i++ {

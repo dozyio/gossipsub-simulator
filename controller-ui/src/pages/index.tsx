@@ -73,8 +73,7 @@ type MapView = 'circle' | 'graph';
 
 const ENDPOINT = "http://localhost:8080"
 const WS_ENDPOINT = "ws://localhost:8080/ws"
-// const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
-const DEBUG_STRING = 'DEBUG=libp2p:gossipsub';
+const DEBUG_STRING = 'DEBUG=*,*:trace,-*libp2p:peer-store:trace';
 
 // Container dimensions
 const CONTAINER_WIDTH = 800;
@@ -110,6 +109,7 @@ export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([]);
   const [imageName, setImageName] = useState<string>('gossip:dev');
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
+  const [connectMultiaddr, setConnectMultiaddr] = useState<string>('');
 
   // ui config
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
@@ -127,6 +127,7 @@ export default function Home() {
   // network config
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev');
   const [debugContainer, setDebugContainer] = useState<boolean>(false);
+  const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING);
   const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false);
   const [gossipD, setGossipD] = useState<string>('8');
   const [gossipDlo, setGossipDlo] = useState<string>('6');
@@ -229,7 +230,7 @@ export default function Home() {
     env.push(`TOPICS=${topicsName}`)
 
     if (debugContainer) {
-      env.push(DEBUG_STRING);
+      env.push(debugStr);
     }
 
     if (hasLatencySettings || hasPacketLossSetting) {
@@ -478,14 +479,9 @@ export default function Home() {
     // }
   };
 
-  const connectTo = async (srcContainerId: string, dstContainerId: string) => {
+  const connectContainers = async(srcContainerId: string, dstContainerId: string) => {
     if (containers.length === 0) {
       return
-    }
-
-    interface Body {
-      containerId: string
-      toMultiaddr: string
     }
 
     // only supports ipv4 for now
@@ -503,9 +499,22 @@ export default function Home() {
       return
     }
 
+    await connectTo(srcContainerId, firstNonLoopback)
+  }
+
+  const connectTo = async (srcContainerId: string, toMultiaddr: string) => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      containerId: string
+      toMultiaddr: string
+    }
+
     const body: Body = {
       containerId: srcContainerId,
-      toMultiaddr: firstNonLoopback 
+      toMultiaddr
     }
 
     try {
@@ -645,7 +654,7 @@ export default function Home() {
     }
 
     if (clickType === 'connectTo') {
-      connectTo(selectedContainer, containerId);
+      connectContainers(selectedContainer, containerId);
       setClickType('connect')
     }
   };
@@ -680,6 +689,14 @@ export default function Home() {
     } else {
       return `#${containerId.substring(0, 6)}`;
     }
+  };
+
+  const getOpacity = (containerId: string) => {
+    if (containerData[containerId]?.multiaddrs.length >= 1) {
+      return 1
+    }
+
+    return 0.65 // semi transparent when no multiaddrs
   };
 
   const getBorderStyle = (containerId: string) => {
@@ -908,6 +925,19 @@ export default function Home() {
           if (!exists) {
             newEdges.push({ from: containerId, to: targetContainerId });
           }
+        } else {
+          // TODO
+          // // connection to non-container peer
+          // // Avoid duplicate edges
+          // const exists = newEdges.some(
+          //   (conn) =>
+          //     (conn.from === containerId && conn.to == peerId) ||
+          //     (conn.from === peerId && conn.to === containerId)
+          // );
+          //
+          // if (!exists) {
+          //   newEdges.push({ from: containerId, to: peerId});
+          // }
         }
       });
     });
@@ -1179,6 +1209,18 @@ export default function Home() {
               </span>
             </label>
           </div>
+          {debugContainer && (
+            <div className="input-group">
+              <label>
+                Debug String:
+                <input
+                  type="text"
+                  value={debugStr}
+                  onChange={(e) => setDebugStr(e.target.value)}
+                />
+              </label>
+            </div>
+          )}
           <div className="input-group">
             <label>
               <input
@@ -1556,11 +1598,12 @@ export default function Home() {
                         top: `${node.y}px`,
                         fontSize: `${Math.max(8, nodeSize / 3)}px`,
                         backgroundColor: `${getBackgroundColor(container.id)}`,
+                        opacity: `${getOpacity(container.id)}`,
                         border: `${getBorderStyle(container.id)}`,
                         borderRadius: `${getBorderRadius(container.id)}`,
                         position: 'absolute',
                         transform: `translate(-50%, -50%)`, // Center the node
-                        transition: 'background-color 0.2s, border 0.1s', // Smooth transitions
+                        transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -1692,8 +1735,10 @@ export default function Home() {
                         transform: `rotate(${angle}deg) translate(0, -${radius}px) rotate(-${angle}deg)`,
                         fontSize: `${fontSize}px`,
                         backgroundColor: `${getBackgroundColor(container.id)}`,
+                        opacity: `${getOpacity(container.id)}`,
                         border: `${getBorderStyle(container.id)}`,
-                        borderRadius: `${getBorderRadius(container.id)}`
+                        borderRadius: `${getBorderRadius(container.id)}`,
+                        transition: 'background-color 0.1s, border 0.1s',
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -1757,6 +1802,17 @@ export default function Home() {
                 <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
                 <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
                 <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
+                <div className="input-group">
+                  <label>
+                    Connect to multiaddr:
+                    <input
+                      type="text"
+                      value={connectMultiaddr}
+                      onChange={(e) => setConnectMultiaddr(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
                 <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
               </div>
               <div>Container ID: {selectedContainer}</div>

@@ -7,6 +7,7 @@ import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
+import { RoutingTable, SingleKadDHT } from '@libp2p/kad-dht'
 
 interface Stream {
   protocol: string,
@@ -103,9 +104,15 @@ export class StatusServer {
     server.addEventListener('connection:close', this.handleConnectionEvent)
     server.addEventListener('connection:prune', this.handleConnectionEvent)
     server.services.pubsub.addEventListener('message', this.handlePubsubMessageEvent)
+    server.addEventListener('self:peer:update', this.handleSelfPeerUpdate)
 
     this.rttSetup()
     this.started = true
+  }
+
+  private handleSelfPeerUpdate = async (evt: CustomEvent) => {
+    const update = await this.fullUpdate()
+    await this.sendUpdate(update)
   }
 
   private handleConnectionEvent = async (evt: CustomEvent) => {
@@ -394,7 +401,7 @@ export class StatusServer {
 
     // dht
     // @ts-ignore-next-line
-    const dhtPeerList = [...this.server.services.lanDHT.routingTable.kb.toIterable()];
+    const dhtPeerList = [...(this.server.services.lanDHT as SingleKadDHT).routingTable.kb.toIterable()];
     const dhtPeers = dhtPeerList.map((peer) => peer.peerId.toString())
     if (!isEqual(dhtPeers, this.lastDhtPeers)) {
       this.lastDhtPeers = dhtPeers
