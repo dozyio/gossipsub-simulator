@@ -6,6 +6,7 @@ import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
 import { GossipSub } from '@chainsafe/libp2p-gossipsub';
 import { fromString } from 'uint8arrays';
 import { toString } from 'uint8arrays'
+import { multiaddr } from '@multiformats/multiaddr'
 
 interface Stream {
   protocol: string,
@@ -192,6 +193,20 @@ export class StatusServer {
                 lastMessage: newMessage.message
               }
               await self.sendUpdate(update)
+            } catch (e) {
+              console.log(e)
+            }
+
+            break;
+          }
+
+          case 'connect': {
+            console.log('connect msg', newMessage)
+            try {
+              const ma = multiaddr(newMessage.message)
+              console.log('dialing', ma)
+              await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
+              console.log('dialed', ma)
             } catch (e) {
               console.log(e)
             }

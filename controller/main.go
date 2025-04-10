@@ -127,6 +127,7 @@ func broadcastContainers() {
 		fmt.Printf("Failed to list containers for broadcast: %v\n", err)
 		return
 	}
+	fmt.Printf("Broadcasting %d containers\n", len(containerInfos))
 
 	message := map[string]interface{}{
 		"mType": "containerList",
@@ -473,7 +474,7 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 	setContainerConn(containerID, c)
 	outMsg, err := addTypeToMessage(resp, "nodeStatus")
 	if err != nil {
-		return fmt.Errorf("Error adding type to message: %s", err)
+		return fmt.Errorf("error adding type to message: %s", err)
 	}
 
 	// fmt.Printf("sending %s", outMsg)
@@ -901,7 +902,7 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if c == nil {
-			http.Error(w, fmt.Sprintf("Failed to write publish to container - container not found: %s", containerID), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Failed to write 'publish' to container - container not found: %s", containerID), http.StatusInternalServerError)
 			return
 		}
 
@@ -920,9 +921,67 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
 			c.Close()
-			http.Error(w, fmt.Sprintf("Failed to write publish to container: %s, %v", containerID, err), http.StatusInternalServerError)
+			http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
 			return
 		}
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// connectHandler sends a message to a container to connect to another host
+func connectHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"containerId"`
+		ToMultiaddr string `json:"toMultiaddr"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// fmt.Printf("connectHandler body %v\n", reqBody)
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		http.Error(w, "Failed - FromContainerID is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	c, ok = containerConns[containerID]
+	if !ok {
+		http.Error(w, fmt.Sprintf("Failed to find container id: %v", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		http.Error(w, fmt.Sprintf("Failed to write 'connect' to container - container not found: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := &ContainerWSReq{
+		MType:   "connect",
+		Message: reqBody.ToMultiaddr,
+	}
+
+	msg, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// fmt.Printf("connect msg %+v\n", message)
+
+	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'connect' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -1107,6 +1166,7 @@ func main() {
 	mux.HandleFunc("/containers/create", createContainerHandler)
 	mux.HandleFunc("/containers/stopall", stopAllContainersHandler)
 	mux.HandleFunc("/publish", publishHandler)
+	mux.HandleFunc("/connect", connectHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)

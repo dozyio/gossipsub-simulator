@@ -65,7 +65,7 @@ interface ContainerData {
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
 
-type ClickType = 'kill' | 'info';
+type ClickType = 'kill' | 'info' | 'connect' | 'connectTo';
 
 type HoverType = 'peerscore' | 'rtt';
 
@@ -73,7 +73,8 @@ type MapView = 'circle' | 'graph';
 
 const ENDPOINT = "http://localhost:8080"
 const WS_ENDPOINT = "ws://localhost:8080/ws"
-const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
+// const DEBUG_STRING = 'DEBUG=*,*:trace,-*peer-store:trace';
+const DEBUG_STRING = 'DEBUG=libp2p:gossipsub';
 
 // Container dimensions
 const CONTAINER_WIDTH = 800;
@@ -417,8 +418,8 @@ export default function Home() {
       amount: number
       topic: string
       containerId?: string
-
     }
+
     const body: Body = {
       amount: amount,
       topic: selectedTopic
@@ -476,6 +477,58 @@ export default function Home() {
     //   console.error('Error sending info message:', error);
     // }
   };
+
+  const connectTo = async (srcContainerId: string, dstContainerId: string) => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      containerId: string
+      toMultiaddr: string
+    }
+
+    // only supports ipv4 for now
+    const firstNonLoopback = containerData[dstContainerId]?.multiaddrs.find(addr => {
+      const ipMatch = addr.match(/\/ip4\/([\d.]+)/);
+      if (ipMatch && ipMatch[1]) {
+        const ip = ipMatch[1];
+        return ip !== '127.0.0.1';
+      }
+      return false;
+    });
+
+    if (!firstNonLoopback) {
+      console.log('No non-loopback IPv4 address found for container', dstContainerId);
+      return
+    }
+
+    const body: Body = {
+      containerId: srcContainerId,
+      toMultiaddr: firstNonLoopback 
+    }
+
+    try {
+      console.log('Sending connect', body)
+
+      const response = await fetch(`${ENDPOINT}/connect`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error connecting: ${errorText}`);
+      }
+
+    } catch (error) {
+      console.error('Error connecting:', error);
+    }
+  };
+
 
   const getLabel = (containerId: string): string => {
     const container = containers.find((c) => c.id === containerId);
@@ -555,8 +608,45 @@ export default function Home() {
   const handleClickType = () => {
     if (clickType === 'kill') {
       setClickType('info');
-    } else {
+    }
+
+    if (clickType === 'info') {
+      setClickType('connect');
+    }
+
+    if (clickType === 'connect') {
       setClickType('kill');
+    }
+
+    if (clickType === 'connectTo') {
+      setClickType('connect');
+    }
+  };
+
+  const handleContainerClick = (containerId: string) => {
+    if (clickType === 'kill') {
+      stopContainer(containerId);
+    }
+
+    if (clickType === 'info') {
+      if (selectedContainer == containerId) {
+        setSelectedContainer('');
+        showContainerInfo('');
+      } else {
+        setSelectedContainer(containerId);
+        showContainerInfo(containerId);
+      }
+    }
+
+    if (clickType === 'connect') {
+      setSelectedContainer(containerId);
+      showContainerInfo(containerId);
+      setClickType('connectTo');
+    }
+
+    if (clickType === 'connectTo') {
+      connectTo(selectedContainer, containerId);
+      setClickType('connect')
     }
   };
 
@@ -565,20 +655,6 @@ export default function Home() {
       setHoverType('rtt');
     } else {
       setHoverType('peerscore');
-    }
-  };
-
-  const handleContainerClick = (containerId: string) => {
-    if (clickType === 'kill') {
-      stopContainer(containerId);
-    } else {
-      if (selectedContainer == containerId) {
-        setSelectedContainer('');
-        showContainerInfo('');
-      } else {
-        setSelectedContainer(containerId);
-        showContainerInfo(containerId);
-      }
     }
   };
 
