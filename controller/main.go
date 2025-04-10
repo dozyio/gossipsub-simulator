@@ -678,10 +678,28 @@ func applyNetworkConfig(ctx context.Context, cli *client.Client, containerID str
 		return fmt.Errorf("no valid network configurations provided")
 	}
 
-	cmd := append([]string{"tc", "qdisc", "add", "dev", "eth0", "root", "netem"}, netemParams...)
-	if err := executeTCCommand(ctx, cli, containerID, cmd); err != nil {
+	// setup two-band prio qdisc so only internal traffic between containers is delayed/lossy
+	bandCmd := []string{"tc", "qdisc", "add", "dev", "eth0", "root", "handle", "1:", "prio", "bands", "2", "priomap", "0", "0", "0", "0", "0", "0", "0", "0"}
+	if err := executeTCCommand(ctx, cli, containerID, bandCmd); err != nil {
+		return fmt.Errorf("failed to setup two band prio qdisc to container %s: %w", containerID[:12], err)
+	}
+
+	// apply delay / loss config for band 2
+	configCmd := append([]string{"tc", "qdisc", "add", "dev", "eth0", "parent", "1:2", "handle", "20:", "netem"}, netemParams...)
+	if err := executeTCCommand(ctx, cli, containerID, configCmd); err != nil {
 		return fmt.Errorf("failed to apply network config to container %s: %w", containerID[:12], err)
 	}
+
+	// apply filter to match 172.20.0.0/16 docker network
+	filterCmd := []string{"tc", "filter", "add", "dev", "eth0", "protocol", "ip", "parent", "1:", "prio", "1", "u32", "match", "ip", "dst", "172.20.0.0/16", "flowid", "1:2"}
+	if err := executeTCCommand(ctx, cli, containerID, filterCmd); err != nil {
+		return fmt.Errorf("failed to apply 172.20.0.0./16 filter to container %s: %w", containerID[:12], err)
+	}
+
+	// cmd := append([]string{"tc", "qdisc", "add", "dev", "eth0", "root", "netem"}, netemParams...)
+	// if err := executeTCCommand(ctx, cli, containerID, cmd); err != nil {
+	// 	return fmt.Errorf("failed to apply network config to container %s: %w", containerID[:12], err)
+	// }
 
 	fmt.Printf("Network config applied successfully to container %s: %v\n", containerID[:12], netemParams)
 	return nil
