@@ -409,6 +409,24 @@ export default function Home() {
     // No need to fetchContainers here, WebSocket updates container list
   };
 
+  const getLogs = async(containerId: string) => {
+    const res = await fetch(`${ENDPOINT}/logs`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        container_id: containerId,
+      }),
+    });
+
+    if (res.status != 200) {
+      console.log("Error fetching logs:", res.status);
+      return
+    }
+    console.log(await res.text())
+  }
+
   // const getRandomColor = () => {
   //   const letters = '0123456789ABCDEF';
   //   let color = '#';
@@ -1848,6 +1866,7 @@ export default function Home() {
                 </div>
                 <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
                 <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
+                <button onClick={() => getLogs(selectedContainer)}>Logs</button>
               </div>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>

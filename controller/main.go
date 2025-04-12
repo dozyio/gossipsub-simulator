@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	"github.com/gorilla/websocket"
 )
@@ -961,8 +963,6 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// fmt.Printf("connectHandler body %v\n", reqBody)
-
 	var c *websocket.Conn
 
 	if reqBody.ContainerID == "" {
@@ -979,7 +979,7 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if c == nil {
-		http.Error(w, fmt.Sprintf("Failed to write 'connect' to container - container not found: %s", containerID), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("container is nil: %s", containerID), http.StatusInternalServerError)
 		return
 	}
 
@@ -994,8 +994,6 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// fmt.Printf("connect msg %+v\n", message)
-
 	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
 		c.Close()
@@ -1004,6 +1002,70 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+// logHandler sends logs for a container
+func logHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("logHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("logHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	c, ok = containerConns[containerID]
+	if !ok {
+		log.Printf("logHandler: Failed to find container id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("logHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	logOptions := container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Timestamps: true,
+		Details:    false,
+	}
+
+	lrc, err := DockerClient.ContainerLogs(context.Background(), containerID, logOptions)
+	if err != nil {
+		log.Printf("logHandler: failed getting container logs: %s", containerID)
+		http.Error(w, fmt.Sprintf("failed getting container logs: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	defer lrc.Close()
+
+	var logs bytes.Buffer
+	_, err = stdcopy.StdCopy(&logs, &logs, lrc)
+	if err != nil {
+		log.Printf("logHandler: failed copying container logs: %s", containerID)
+		http.Error(w, fmt.Sprintf("failed copying container logs: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write(logs.Bytes())
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1186,6 +1248,7 @@ func main() {
 	mux.HandleFunc("/containers/stopall", stopAllContainersHandler)
 	mux.HandleFunc("/publish", publishHandler)
 	mux.HandleFunc("/connect", connectHandler)
+	mux.HandleFunc("POST /logs", logHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)

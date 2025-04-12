@@ -192,7 +192,7 @@ export class StatusServer {
               await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
               if (self.perfBytes) {
                 try {
-                  for await (const output of self.server.services.perf.measurePerformance(ma, self.perfBytes, self.perfBytes)) {
+                  for await (const output of self.server.services.perf.measurePerformance(ma, self.perfBytes, self.perfBytes, { reuseExistingConnection: true })) {
                     console.log('perf', output)
                   }
                 } catch (err: any) {
