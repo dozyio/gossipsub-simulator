@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/tar"
 	"bufio"
 	"bytes"
 	"context"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,7 +41,7 @@ var (
 
 	// Map to track container WebSocket connections
 	containerConns   = make(map[string]*websocket.Conn)
-	containerConnsMu sync.Mutex
+	containerConnsMu sync.RWMutex
 
 	// Map to track frontend connections
 	clients   = make(map[*websocket.Conn]bool)
@@ -486,8 +488,7 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 	// Start a goroutine to continuously read messages (node updates) from the container
 	go func(containerID string, conn *websocket.Conn) {
 		defer func() {
-			conn.Close()
-			removeContainerConn(containerID)
+			closeContainerConn(containerID)
 		}()
 
 		for {
@@ -832,15 +833,15 @@ func getRandomContainerConn() (string, *websocket.Conn) {
 	return randomKey, containerConns[randomKey]
 }
 
-func getRandomColor() string {
-	letters := "0123456789ABCDEF"
-	color := "#"
-	for i := 0; i < 6; i++ {
-		idx := rand.IntN(16)
-		color += string(letters[idx])
-	}
-	return color
-}
+// func getRandomColor() string {
+// 	letters := "0123456789ABCDEF"
+// 	color := "#"
+// 	for i := 0; i < 6; i++ {
+// 		idx := rand.IntN(16)
+// 		color += string(letters[idx])
+// 	}
+// 	return color
+// }
 
 func getRandomColorV2() string {
 	for {
@@ -909,13 +910,17 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 	containerID := ""
 	var c *websocket.Conn
 
-	for i := 0; i < amount; i++ {
+	for range amount {
 		if reqBody.ContainerID != "" {
 			var ok bool
 			containerID = reqBody.ContainerID
-			c, ok = containerConns[containerID]
+			containerConnsMu.Lock()
+			{
+				c, ok = containerConns[containerID]
+			}
+			containerConnsMu.Unlock()
 			if !ok {
-				http.Error(w, fmt.Sprintf("Failed to find container id: %v", containerID), http.StatusInternalServerError)
+				http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 				return
 			}
 		} else {
@@ -939,7 +944,7 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		c.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
 			c.Close()
 			http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
@@ -972,9 +977,13 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	c, ok = containerConns[containerID]
+	containerConnsMu.Lock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.Unlock()
 	if !ok {
-		http.Error(w, fmt.Sprintf("Failed to find container id: %v", containerID), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 		return
 	}
 
@@ -1027,10 +1036,14 @@ func logHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	c, ok = containerConns[containerID]
+	containerConnsMu.Lock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.Unlock()
 	if !ok {
-		log.Printf("logHandler: Failed to find container id: %s", containerID)
-		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
+		log.Printf("logHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
 		return
 	}
 
@@ -1066,6 +1079,156 @@ func logHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write(logs.Bytes())
+}
+
+// tcpdumpStartHandler start tcpdump on a container
+func tcpdumpStartHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("logHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("logHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.Lock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.Unlock()
+	if !ok {
+		log.Printf("logHandler: Failed to find container id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("logHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	filename := fmt.Sprintf("/tmp/%s.pcap", containerID)
+	ctx := context.Background()
+
+	execConfig := container.ExecOptions{
+		Cmd:    []string{"sh", "-c", fmt.Sprintf("tcpdump -w %s", filename)},
+		Detach: true,
+		Tty:    false,
+	}
+	execResp, err := DockerClient.ContainerExecCreate(ctx, containerID, execConfig)
+	if err != nil {
+		http.Error(w, "failed to create tcpdump exec: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	startOpts := container.ExecStartOptions{Detach: true, Tty: false}
+	if err := DockerClient.ContainerExecStart(ctx, execResp.ID, startOpts); err != nil {
+		http.Error(w, "failed to start tcpdump: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// tcpdumpStopHandler stops tcpdump and downloads the pcap file
+func tcpdumpStopHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("logHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("logHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.Lock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.Unlock()
+	if !ok {
+		log.Printf("logHandler: Failed to find container id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("logHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	filename := fmt.Sprintf("/tmp/%s.pcap", containerID)
+	ctx := context.Background()
+
+	// Best‑effort stop of tcpdump
+	killExecConfig := container.ExecOptions{
+		Cmd:          []string{"pkill", "tcpdump"},
+		AttachStdout: true,
+		AttachStderr: true,
+	}
+	if killResp, err := DockerClient.ContainerExecCreate(ctx, containerID, killExecConfig); err == nil {
+		// run synchronously so we wait for the process to exit
+		stopOpts := container.ExecStartOptions{Detach: false, Tty: false}
+		_ = DockerClient.ContainerExecStart(ctx, killResp.ID, stopOpts)
+	}
+
+	// Copy the .pcap out of the container
+	reader, stat, err := DockerClient.CopyFromContainer(ctx, containerID, filename)
+	if err != nil {
+		http.Error(w, "failed to copy pcap: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer reader.Close()
+
+	w.Header().Set("Content-Type", "application/vnd.tcpdump.pcap")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.pcap"`, containerID))
+
+	tr := tar.NewReader(reader)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			http.Error(w, "tar read error: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if strings.HasSuffix(hdr.Name, stat.Name) ||
+			filepath.Base(hdr.Name) == filepath.Base(filename) {
+			if _, err := io.Copy(w, tr); err != nil {
+				http.Error(w, "failed streaming pcap: "+err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+	}
+
+	http.Error(w, "pcap not found in archive", http.StatusInternalServerError)
 }
 
 func wsHandler(w http.ResponseWriter, r *http.Request) {
@@ -1249,6 +1412,8 @@ func main() {
 	mux.HandleFunc("/publish", publishHandler)
 	mux.HandleFunc("/connect", connectHandler)
 	mux.HandleFunc("POST /logs", logHandler)
+	mux.HandleFunc("POST /tcpdump/start", tcpdumpStartHandler)
+	mux.HandleFunc("POST /tcpdump/stop", tcpdumpStopHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)

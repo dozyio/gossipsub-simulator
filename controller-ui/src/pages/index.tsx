@@ -3,7 +3,6 @@ import { FaCircleNodes } from "react-icons/fa6";
 import { FaRegCircle } from "react-icons/fa";
 import { useEffect, useRef, useState } from 'react';
 
-
 interface PortMapping {
   ip: string;
   private_port: number;
@@ -42,6 +41,7 @@ interface ContainerData {
   containerId: string
   id: string; // Unique identifier
   peerId: string;
+  tcpdumping: boolean;
   pubsubPeers: string[];
   subscribersList: Record<string, string[]>;
   libp2pPeers: string[];
@@ -58,18 +58,15 @@ interface ContainerData {
   peerScores: PeerScores;
   rtts: RRTs;
   connectTime: number
-  x: number; // Position X
-  y: number; // Position Y
+  x: number;
+  y: number;
   vx: number; // Velocity X
   vy: number; // Velocity Y
 }
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
-
 type ClickType = 'kill' | 'info' | 'connect' | 'connectTo';
-
 type HoverType = 'peerscore' | 'rtt';
-
 type MapView = 'circle' | 'graph';
 
 const ENDPOINT = "http://localhost:8080"
@@ -141,6 +138,7 @@ export default function Home() {
   const [packetLoss, setPacketLoss] = useState<string>('10');
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
+  const [disableNoise, setDisableNoise] = useState<boolean>(false)
 
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([]);
@@ -173,6 +171,7 @@ export default function Home() {
             containerId: container.id,
             id: container.id,
             peerId: '',
+            tcpdumping: false,
             pubsubPeers: [],
             subscribersList: {},
             libp2pPeers: [],
@@ -273,6 +272,10 @@ export default function Home() {
 
     if (hasPerfSetting && perfBytes) {
       env.push(`PERF=${perfBytes}`)
+    }
+
+    if (disableNoise) {
+      env.push('DISABLE_NOISE=1')
     }
 
     return env
@@ -410,22 +413,111 @@ export default function Home() {
   };
 
   const getLogs = async(containerId: string) => {
+  try {
     const res = await fetch(`${ENDPOINT}/logs`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        container_id: containerId,
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ container_id: containerId }),
     });
-
-    if (res.status != 200) {
-      console.log("Error fetching logs:", res.status);
-      return
+    if (!res.ok) {
+      console.error('Error fetching logs:', res.status);
+      return;
     }
-    console.log(await res.text())
+
+    const text = await res.text();
+    console.log(text);
+    const blob = new Blob([text], { type: 'text/plain' });
+
+    // Create a download link and click it
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${containerId}.log`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } catch (err: any) {
+    console.error('Error downloading logs:', err);
   }
+  }
+
+  const startTCPDump = async(containerId: string) => {
+    try {
+      const res = await fetch(`${ENDPOINT}/tcpdump/start`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          container_id: containerId,
+        }),
+      });
+
+      if (!res.ok) {
+        console.log("Error starting tcpdump:", res.status);
+        throw new Error(`Error starting tcpdump ${res.status}`);
+      }
+
+      setContainerData((prevData) => {
+        const existing = prevData[containerId];
+        if (!existing) return prevData;
+
+        return {
+          ...prevData,
+          [containerId]: {
+            ...existing,
+            tcpdumping: true,
+          },
+        };
+      });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) { 
+      console.log("Error starting tcpdump:", err);
+    }
+  }
+
+  const stopTCPDump = async (containerId: string) => {
+    try {
+      const res = await fetch(`${ENDPOINT}/tcpdump/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          container_id: containerId
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Status ${res.status}`);
+      }
+
+      setContainerData((prevData) => {
+        const existing = prevData[containerId];
+        if (!existing) return prevData;
+
+        return {
+          ...prevData,
+          [containerId]: {
+            ...existing,
+            tcpdumping: false,
+          },
+        };
+      });
+
+      const blob = await res.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = downloadUrl;
+      a.download = `${containerId}.pcap`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      console.error('Error stopping tcpdump:', err);
+    }
+  };
 
   // const getRandomColor = () => {
   //   const letters = '0123456789ABCDEF';
@@ -768,10 +860,10 @@ export default function Home() {
         [data.containerId]: {
           ...existing,
           ...data, // Merge new data
-          x: existing.x,
-          y: existing.y,
-          vx: existing.vx,
-          vy: existing.vy,
+          // x: existing.x,
+          // y: existing.y,
+          // vx: existing.vx,
+          // vy: existing.vy,
         },
       };
     });
@@ -1393,6 +1485,18 @@ export default function Home() {
               </div>
             </div>
           )}
+          <div className="input-group">
+            <label>
+              <input
+                type="checkbox"
+                checked={disableNoise}
+                onChange={() => setDisableNoise(!disableNoise)}
+              />
+              <span style={{ marginLeft: '5px' }}>
+                Disable Noise
+              </span>
+            </label>
+          </div>
 
           <h3>Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -1867,6 +1971,8 @@ export default function Home() {
                 <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
                 <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
                 <button onClick={() => getLogs(selectedContainer)}>Logs</button>
+                {!containerData[selectedContainer].tcpdumping && <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>}
+                {containerData[selectedContainer].tcpdumping && <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>}
               </div>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
@@ -1930,6 +2036,7 @@ export default function Home() {
 
         .input-group {
           margin-bottom: 10px;
+          user-select: none;
         }
 
         .input-group label {

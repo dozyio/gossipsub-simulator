@@ -7,7 +7,7 @@ import { identify } from '@libp2p/identify'
 import { webSockets } from '@libp2p/websockets'
 import { tcp } from '@libp2p/tcp'
 import * as filters from '@libp2p/websockets/filters'
-import { createLibp2p } from 'libp2p'
+import { createLibp2p, Libp2pOptions } from 'libp2p'
 import { kadDHT } from '@libp2p/kad-dht'
 import { ping } from '@libp2p/ping'
 import { applicationScore, removePublicAddressesLoopbackAddressesMapper } from './helpers.js'
@@ -18,6 +18,7 @@ import { multiaddr } from '@multiformats/multiaddr'
 import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts.js'
 import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 import { perf } from '@libp2p/perf'
+import { plaintext } from '@libp2p/plaintext'
 
 (async () => {
   try {
@@ -59,8 +60,13 @@ import { perf } from '@libp2p/perf'
       DOUT = parseInt(process.env.GOSSIP_DOUT)
     }
 
+    let encrypters = "noise"
+    if (process.env.DISABLE_NOISE !== undefined) {
+      encrypters = "plaintext"
+    }
+
     // Configure Libp2p
-    const libp2pConfig = {
+    const libp2pConfig: Libp2pOptions = {
       addresses: {
         listen: [`/ip4/0.0.0.0/tcp/0`],
       },
@@ -70,7 +76,7 @@ import { perf } from '@libp2p/perf'
         }),
         tcp(),
       ],
-      connectionEncrypters: [noise()],
+      // connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // peerDiscovery: [
       //   // Uncomment and configure if peer discovery is needed
@@ -159,6 +165,12 @@ import { perf } from '@libp2p/perf'
           peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
         }),
       }
+    }
+
+    if (encrypters === "noise") {
+      libp2pConfig.connectionEncrypters = [noise()]
+    } else {
+      libp2pConfig.connectionEncrypters = [plaintext()]
     }
 
     // Create Libp2p instance

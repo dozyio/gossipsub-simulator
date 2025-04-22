@@ -17,6 +17,7 @@ import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrap
 import { Libp2pType } from './types.js'
 import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 import { perf } from '@libp2p/perf'
+import { plaintext } from '@libp2p/plaintext'
 
 (async () => {
   try {
@@ -63,6 +64,11 @@ import { perf } from '@libp2p/perf'
     let DOUT = 0
     if (process.env.GOSSIP_DOUT !== undefined) {
       DOUT = parseInt(process.env.GOSSIP_DOUT)
+    }
+
+    let encrypters = "noise"
+    if (process.env.DISABLE_NOISE !== undefined) {
+      encrypters = "plaintext"
     }
 
     // Generate key pair
@@ -171,7 +177,7 @@ import { perf } from '@libp2p/perf'
           backlog: 30,
         })
       ],
-      connectionEncrypters: [noise()],
+      // connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // peerDiscovery: [
       //   pubsubPeerDiscovery()
@@ -196,6 +202,12 @@ import { perf } from '@libp2p/perf'
           // }
         }),
       }
+    }
+
+    if (encrypters === "noise") {
+      libp2pConfig.connectionEncrypters = [noise()]
+    } else {
+      libp2pConfig.connectionEncrypters = [plaintext()]
     }
 
     // Create Libp2p instance

@@ -3,10 +3,11 @@
 import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 import { tcp } from '@libp2p/tcp'
-import { createLibp2p } from 'libp2p'
+import { createLibp2p, Libp2pOptions } from 'libp2p'
 import { Libp2pType } from './types.js'
 import { StatusServer } from './status-server.js'
 import { perf } from '@libp2p/perf'
+import { plaintext } from '@libp2p/plaintext'
 
 (async () => {
   try {
@@ -15,8 +16,13 @@ import { perf } from '@libp2p/perf'
       perfBytes = Number(process.env.PERF)
     }
 
+    let encrypters = "noise"
+    if (process.env.DISABLE_NOISE !== undefined) {
+      encrypters = "plaintext"
+    }
+
     // Configure Libp2p
-    const libp2pConfig = {
+    const libp2pConfig: Libp2pOptions = {
       addresses: {
         listen: [`/ip4/0.0.0.0/tcp/0`],
       },
@@ -28,6 +34,12 @@ import { perf } from '@libp2p/perf'
       services: {
         perf: perf(),
       }
+    }
+
+    if (encrypters === "noise") {
+      libp2pConfig.connectionEncrypters = [noise()]
+    } else {
+      libp2pConfig.connectionEncrypters = [plaintext()]
     }
 
     // Create Libp2p instance

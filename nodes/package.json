@@ -23,6 +23,7 @@
     "@libp2p/logger": "^5.1.4",
     "@libp2p/perf": "^4.0.33",
     "@libp2p/ping": "^2.0.12",
+    "@libp2p/plaintext": "^2.0.22",
     "@libp2p/pubsub-peer-discovery": "^11.0.0",
     "@libp2p/tcp": "^10.0.13",
     "@libp2p/websockets": "^9.0.13",

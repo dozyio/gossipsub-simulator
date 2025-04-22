@@ -4,7 +4,7 @@ WORKDIR /app
 
 ## adding iproute2/iptables allow us to simulate network delay by running
 ## tc qdisc add dev eth0 root netem delay 100ms
-RUN apk add --no-cache iproute2 iptables
+RUN apk add --no-cache iproute2 iptables tcpdump
 
 COPY package.json package-lock.json ./
 COPY src ./src
