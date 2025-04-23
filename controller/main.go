@@ -132,7 +132,7 @@ func broadcastContainers() {
 		fmt.Printf("Failed to list containers for broadcast: %v\n", err)
 		return
 	}
-	// fmt.Printf("Broadcasting %d containers\n", len(containerInfos))
+	// fmt.Printf("Broadcasting %d containers info\n", len(containerInfos))
 
 	message := map[string]any{
 		"mType": "containerList",
@@ -148,6 +148,7 @@ func broadcastContainers() {
 }
 
 func broadcastToClients(data []byte) {
+	// log.Printf("broadcasting to %d clients\n", len(clients))
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	for c := range clients {
@@ -476,6 +477,10 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 
 	// Store the container connection
 	setContainerConn(containerID, c)
+
+	// send list of containers before sending this nodeStatus update
+	broadcastContainers()
+
 	outMsg, err := addTypeToMessage(resp, "nodeStatus")
 	if err != nil {
 		return fmt.Errorf("error adding type to message: %s", err)

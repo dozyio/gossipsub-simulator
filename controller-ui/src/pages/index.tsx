@@ -223,8 +223,8 @@ export default function Home() {
       }
 
       const data = await response.json()
-      console.log('Container started:', data)
-      // No need to call fetchContainers here since WebSocket will handle updates now
+      console.log('Container starting:', data)
+
       return data
     } catch (error) {
       console.error('Error starting container:', error)
@@ -323,7 +323,6 @@ export default function Home() {
         promises.push(startContainer(imageName, env))
       }
       await Promise.all(promises)
-      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error starting containers:', error)
     }
@@ -347,7 +346,6 @@ export default function Home() {
       }
 
       console.log(`Container ${containerID} stopped`)
-      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error stopping container:', error)
     }
@@ -363,8 +361,6 @@ export default function Home() {
         const errorText = await response.text()
         throw new Error(`Error stopping all containers: ${errorText}`)
       }
-
-      // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
       console.error('Error stopping all containers:', error)
     }
@@ -409,8 +405,6 @@ export default function Home() {
         console.error('Error stopping container:', error)
       }
     }
-
-    // No need to fetchContainers here, WebSocket updates container list
   }
 
   const getLogs = async (containerId: string) => {
@@ -520,15 +514,6 @@ export default function Home() {
     }
   }
 
-  // const getRandomColor = () => {
-  //   const letters = '0123456789ABCDEF';
-  //   let color = '#';
-  //   for (let i = 0; i < 6; i++) {
-  //     color += letters[Math.floor(Math.random() * 16)];
-  //   }
-  //   return color;
-  // };
-
   const publishToTopic = async (containerId: string = '', amount = 1) => {
     if (containers.length === 0) {
       return
@@ -573,28 +558,7 @@ export default function Home() {
     const data = containerData[containerId]
     if (data) {
       console.log(`Container Data for ID ${containerId}:`, data)
-    } else {
-      console.log(`No data available for container ID ${containerId}`)
     }
-    // try {
-    //   // Extract the WebSocket instance
-    //   const s = containerSockets.current[containerId];
-    //
-    //   if (!s) {
-    //     throw new Error('No WebSocket connection available for container ID');
-    //   }
-    //
-    //   const message = {
-    //     type: 'info',
-    //     message: ''
-    //   };
-    //
-    //   s.send(JSON.stringify(message));
-    //
-    //   console.log('Info message sent to container');
-    // } catch (error) {
-    //   console.error('Error sending info message:', error);
-    // }
   }
 
   const connectContainers = async (srcContainerId: string, dstContainerId: string) => {
@@ -845,21 +809,21 @@ export default function Home() {
   }
 
   // Function to handle WebSocket messages and update containerData
-  const handleWebSocketMessage = (data: ContainerData) => {
+  const handleNodeStatusUpdate = (data: ContainerData) => {
+    // console.log('handleNodeStatusUpdate', data)
+
     setContainerData((prevData) => {
       const existing = prevData[data.containerId]
-      if (!existing) return prevData // If container is not in the data, skip
+      if (!existing) {
+        return prevData // If container is not in the data, skip
+      }
 
       // Merge new data with existing containerData while preserving positions and velocities
       return {
         ...prevData,
         [data.containerId]: {
           ...existing,
-          ...data, // Merge new data
-          // x: existing.x,
-          // y: existing.y,
-          // vx: existing.vx,
-          // vy: existing.vy,
+          ...data,
         },
       }
     })
@@ -930,13 +894,14 @@ export default function Home() {
           const json = JSON.parse(event.data)
           switch (json.mType) {
             case 'containerList':
+              // console.log('containerList', json)
               const updatedContainers: ContainerInfo[] = json.data
               const runningContainers = updatedContainers.filter((c) => c.state === 'running')
               setContainers(runningContainers)
               initializeContainerData(runningContainers)
               break
             case 'nodeStatus':
-              handleWebSocketMessage(json)
+              handleNodeStatusUpdate(json)
               break
             default:
               console.log('Controller WebSocket: unknown type', json.mType)
@@ -1058,8 +1023,6 @@ export default function Home() {
       setEdges(newEdges)
     }
   }, [containerData, mapType])
-
-  // Removed the polling-based fetchContainers interval. We rely on WebSocket updates now.
 
   // Auto publish if enabled
   useEffect(() => {
