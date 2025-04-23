@@ -975,7 +975,9 @@ export default function Home() {
         clearTimeout(reconnectTimeout.current)
       }
 
-      wsRef.current?.close() // Close the WebSocket connection on unmount
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current?.close() // Close the WebSocket connection on unmount
+      }
     }
   }, [])
 
