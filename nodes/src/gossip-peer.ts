@@ -15,25 +15,41 @@ import { Libp2pType } from './types.js'
 import { StatusServer } from './status-server.js'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
-import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts.js'
+import {
+  acceptPXScoreThreshold,
+  bootstrapper1Ma,
+  bootstrapper1PeerId,
+  bootstrapper2Ma,
+  bootstrapper2PeerId,
+  firstMessageDeliveriesCap,
+  firstMessageDeliveriesDecay,
+  firstMessageDeliveriesWeight,
+  gossipScoreThreshold,
+  graylistScoreThreshold,
+  opportunisticGraftScoreThreshold,
+  publishScoreThreshold,
+  timeInMeshCap,
+  timeInMeshQuantum,
+  timeInMeshWeight,
+  topicScoreCap,
+  topicWeight,
+} from './consts.js'
 import { createPeerScoreParams, createTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
 import { perf } from '@libp2p/perf'
 import { plaintext } from '@libp2p/plaintext'
-
-(async () => {
+;(async () => {
   try {
     let topics: string[] = []
     if (process.env.TOPICS !== undefined) {
-      topics = process.env.TOPICS.split(",")
+      topics = process.env.TOPICS.split(',')
     } else {
-      console.log("TOPICS env not set")
+      console.log('TOPICS env not set')
     }
 
     let perfBytes = 0
     if (process.env.PERF !== undefined) {
       perfBytes = Number(process.env.PERF)
     }
-
 
     let dhtPrefix = 'local'
     if (process.env.DHTPREFIX !== undefined) {
@@ -60,9 +76,9 @@ import { plaintext } from '@libp2p/plaintext'
       DOUT = parseInt(process.env.GOSSIP_DOUT)
     }
 
-    let encrypters = "noise"
+    let encrypters = 'noise'
     if (process.env.DISABLE_NOISE !== undefined) {
-      encrypters = "plaintext"
+      encrypters = 'plaintext'
     }
 
     // Configure Libp2p
@@ -71,9 +87,9 @@ import { plaintext } from '@libp2p/plaintext'
         listen: [`/ip4/0.0.0.0/tcp/0`],
       },
       transports: [
-        webSockets({
-          filter: filters.all
-        }),
+        // webSockets({
+        //   filter: filters.all
+        // }),
         tcp(),
       ],
       // connectionEncrypters: [noise()],
@@ -118,38 +134,41 @@ import { plaintext } from '@libp2p/plaintext'
 
             topicScoreCap: topicScoreCap,
 
-            topics: topics.reduce((acc, topic) => {
-              acc[topic] = createTopicScoreParams({
-                topicWeight: topicWeight,
+            topics: topics.reduce(
+              (acc, topic) => {
+                acc[topic] = createTopicScoreParams({
+                  topicWeight: topicWeight,
 
-                // P1
-                timeInMeshWeight: timeInMeshWeight,
-                timeInMeshQuantum: timeInMeshQuantum,
-                timeInMeshCap: timeInMeshCap,
+                  // P1
+                  timeInMeshWeight: timeInMeshWeight,
+                  timeInMeshQuantum: timeInMeshQuantum,
+                  timeInMeshCap: timeInMeshCap,
 
-                // P2
-                firstMessageDeliveriesWeight: firstMessageDeliveriesWeight,
-                firstMessageDeliveriesDecay: firstMessageDeliveriesDecay,
-                firstMessageDeliveriesCap: firstMessageDeliveriesCap,
+                  // P2
+                  firstMessageDeliveriesWeight: firstMessageDeliveriesWeight,
+                  firstMessageDeliveriesDecay: firstMessageDeliveriesDecay,
+                  firstMessageDeliveriesCap: firstMessageDeliveriesCap,
 
-                // P3
-                meshMessageDeliveriesWeight: 0,
-                // meshMessageDeliveriesDecay: 0,
-                // meshMessageDeliveriesCap: 0,
-                // meshMessageDeliveriesThreshold: 0,
-                // meshMessageDeliveriesWindow: 0,
-                // meshMessageDeliveriesActivation: 0,
+                  // P3
+                  meshMessageDeliveriesWeight: 0,
+                  // meshMessageDeliveriesDecay: 0,
+                  // meshMessageDeliveriesCap: 0,
+                  // meshMessageDeliveriesThreshold: 0,
+                  // meshMessageDeliveriesWindow: 0,
+                  // meshMessageDeliveriesActivation: 0,
 
-                // P3b
-                meshFailurePenaltyWeight: 0,
-                // meshFailurePenaltyDecay: 0,
+                  // P3b
+                  meshFailurePenaltyWeight: 0,
+                  // meshFailurePenaltyDecay: 0,
 
-                // P4
-                invalidMessageDeliveriesWeight: 0,
-                // invalidMessageDeliveriesDecay: 0,
-              });
-              return acc;
-            }, {} as Record<string, ReturnType<typeof createTopicScoreParams>>), // Map topics to params
+                  // P4
+                  invalidMessageDeliveriesWeight: 0,
+                  // invalidMessageDeliveriesDecay: 0,
+                })
+                return acc
+              },
+              {} as Record<string, ReturnType<typeof createTopicScoreParams>>,
+            ), // Map topics to params
           }),
           scoreThresholds: {
             gossipThreshold: gossipScoreThreshold,
@@ -164,29 +183,35 @@ import { plaintext } from '@libp2p/plaintext'
           // clientMode: true,
           peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
         }),
-      }
+      },
     }
 
-    if (encrypters === "noise") {
+    if (encrypters === 'noise') {
       libp2pConfig.connectionEncrypters = [noise()]
     } else {
       libp2pConfig.connectionEncrypters = [plaintext()]
     }
 
+    console.log('starting instance')
     // Create Libp2p instance
-    const server: Libp2pType = await createLibp2p(libp2pConfig) as Libp2pType
+    const server: Libp2pType = (await createLibp2p(libp2pConfig)) as Libp2pType
+    console.log('started instance')
+
+    // Initialize StatusServer
+    const type = 'gossip'
+    console.log('starting status server')
+    const statusServer = new StatusServer(server, type, topics, perfBytes)
+    console.log('started status server')
+
+    console.log(
+      'Gossip peer listening on multiaddr(s): ',
+      server.getMultiaddrs().map((ma) => ma.toString()),
+    )
 
     // Subscribe to topic
     for (let i = 0; i < topics.length; i++) {
       server.services.pubsub.subscribe(topics[i])
     }
-
-
-    // Initialize StatusServer
-    const type = 'gossip'
-    const statusServer = new StatusServer(server, type, topics, perfBytes)
-
-    console.log('Gossip peer listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
 
     try {
       await server.dial(multiaddr(bootstrapper1Ma), { signal: AbortSignal.timeout(10_000) })
@@ -207,7 +232,7 @@ import { plaintext } from '@libp2p/plaintext'
 
       let hasBootstrapperConn = false
 
-      server.getConnections(peerIdFromString(bootstrapper1PeerId)).forEach(conn => {
+      server.getConnections(peerIdFromString(bootstrapper1PeerId)).forEach((conn) => {
         hasBootstrapperConn = true
       })
 
@@ -233,7 +258,7 @@ import { plaintext } from '@libp2p/plaintext'
       }
       let hasBootstrapperConn = false
 
-      server.getConnections(peerIdFromString(bootstrapper2PeerId)).forEach(conn => {
+      server.getConnections(peerIdFromString(bootstrapper2PeerId)).forEach((conn) => {
         hasBootstrapperConn = true
       })
 
@@ -252,7 +277,6 @@ import { plaintext } from '@libp2p/plaintext'
       }
     }, 20_000)
 
-
     const shutdown = async () => {
       // console.log('Shutting down Libp2p...')
       // await server.stop()
@@ -261,7 +285,6 @@ import { plaintext } from '@libp2p/plaintext'
 
     process.on('SIGTERM', shutdown)
     process.on('SIGINT', shutdown)
-
   } catch (error) {
     console.error('An error occurred during initialization:', error)
     process.exit(1)

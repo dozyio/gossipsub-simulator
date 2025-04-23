@@ -13,13 +13,34 @@ import { multiaddr } from '@multiformats/multiaddr'
 import { kadDHT } from '@libp2p/kad-dht'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { StatusServer } from './status-server.js'
-import { acceptPXScoreThreshold, bootstrapper1Ma, bootstrapper1PeerId, bootstrapper2Ma, bootstrapper2PeerId, firstMessageDeliveriesCap, firstMessageDeliveriesDecay, firstMessageDeliveriesWeight, gossipScoreThreshold, graylistScoreThreshold, opportunisticGraftScoreThreshold, publishScoreThreshold, timeInMeshCap, timeInMeshQuantum, timeInMeshWeight, topicScoreCap, topicWeight } from './consts.js'
+import {
+  acceptPXScoreThreshold,
+  bootstrapper1Ma,
+  bootstrapper1PeerId,
+  bootstrapper2Ma,
+  bootstrapper2PeerId,
+  firstMessageDeliveriesCap,
+  firstMessageDeliveriesDecay,
+  firstMessageDeliveriesWeight,
+  gossipScoreThreshold,
+  graylistScoreThreshold,
+  opportunisticGraftScoreThreshold,
+  publishScoreThreshold,
+  timeInMeshCap,
+  timeInMeshQuantum,
+  timeInMeshWeight,
+  topicScoreCap,
+  topicWeight,
+} from './consts.js'
 import { Libp2pType } from './types.js'
-import { createPeerScoreParams, createTopicScoreParams, defaultTopicScoreParams } from '@chainsafe/libp2p-gossipsub/score'
+import {
+  createPeerScoreParams,
+  createTopicScoreParams,
+  defaultTopicScoreParams,
+} from '@chainsafe/libp2p-gossipsub/score'
 import { perf } from '@libp2p/perf'
 import { plaintext } from '@libp2p/plaintext'
-
-(async () => {
+;(async () => {
   try {
     let seed = '0x1111111111111111111111111111111111111111111111111111111111111111'
     if (process.env.SEED !== undefined) {
@@ -33,9 +54,9 @@ import { plaintext } from '@libp2p/plaintext'
 
     let topics: string[] = []
     if (process.env.TOPICS !== undefined) {
-      topics = process.env.TOPICS.split(",")
+      topics = process.env.TOPICS.split(',')
     } else {
-      console.log("TOPICS env not set")
+      console.log('TOPICS env not set')
     }
 
     let dhtPrefix = 'local'
@@ -66,9 +87,9 @@ import { plaintext } from '@libp2p/plaintext'
       DOUT = parseInt(process.env.GOSSIP_DOUT)
     }
 
-    let encrypters = "noise"
+    let encrypters = 'noise'
     if (process.env.DISABLE_NOISE !== undefined) {
-      encrypters = "plaintext"
+      encrypters = 'plaintext'
     }
 
     // Generate key pair
@@ -101,38 +122,41 @@ import { plaintext } from '@libp2p/plaintext'
 
         topicScoreCap: topicScoreCap,
 
-        topics: topics.reduce((acc, topic) => {
-          acc[topic] = createTopicScoreParams({
-            topicWeight: topicWeight,
+        topics: topics.reduce(
+          (acc, topic) => {
+            acc[topic] = createTopicScoreParams({
+              topicWeight: topicWeight,
 
-            // P1
-            timeInMeshWeight: timeInMeshWeight,
-            timeInMeshQuantum: timeInMeshQuantum,
-            timeInMeshCap: timeInMeshCap,
+              // P1
+              timeInMeshWeight: timeInMeshWeight,
+              timeInMeshQuantum: timeInMeshQuantum,
+              timeInMeshCap: timeInMeshCap,
 
-            // P2
-            firstMessageDeliveriesWeight: firstMessageDeliveriesWeight,
-            firstMessageDeliveriesDecay: firstMessageDeliveriesDecay,
-            firstMessageDeliveriesCap: firstMessageDeliveriesCap,
+              // P2
+              firstMessageDeliveriesWeight: firstMessageDeliveriesWeight,
+              firstMessageDeliveriesDecay: firstMessageDeliveriesDecay,
+              firstMessageDeliveriesCap: firstMessageDeliveriesCap,
 
-            // P3
-            meshMessageDeliveriesWeight: 0,
-            // meshMessageDeliveriesDecay: 0,
-            // meshMessageDeliveriesCap: 0,
-            // meshMessageDeliveriesThreshold: 0,
-            // meshMessageDeliveriesWindow: 0,
-            // meshMessageDeliveriesActivation: 0,
+              // P3
+              meshMessageDeliveriesWeight: 0,
+              // meshMessageDeliveriesDecay: 0,
+              // meshMessageDeliveriesCap: 0,
+              // meshMessageDeliveriesThreshold: 0,
+              // meshMessageDeliveriesWindow: 0,
+              // meshMessageDeliveriesActivation: 0,
 
-            // P3b
-            meshFailurePenaltyWeight: 0,
-            // meshFailurePenaltyDecay: 0,
+              // P3b
+              meshFailurePenaltyWeight: 0,
+              // meshFailurePenaltyDecay: 0,
 
-            // P4
-            invalidMessageDeliveriesWeight: 0,
-            // invalidMessageDeliveriesDecay: 0,
-          });
-          return acc;
-        }, {} as Record<string, ReturnType<typeof createTopicScoreParams>>), // Map topics to params
+              // P4
+              invalidMessageDeliveriesWeight: 0,
+              // invalidMessageDeliveriesDecay: 0,
+            })
+            return acc
+          },
+          {} as Record<string, ReturnType<typeof createTopicScoreParams>>,
+        ), // Map topics to params
       }),
       scoreThresholds: {
         gossipThreshold: gossipScoreThreshold,
@@ -150,7 +174,7 @@ import { plaintext } from '@libp2p/plaintext'
       gossipsubConfig.directPeers = [
         {
           id: peerIdFromString(bootstrapper2PeerId),
-          addrs: [multiaddr(bootstrapper2Ma)]
+          addrs: [multiaddr(bootstrapper2Ma)],
         },
       ]
     }
@@ -158,7 +182,7 @@ import { plaintext } from '@libp2p/plaintext'
       gossipsubConfig.directPeers = [
         {
           id: peerIdFromString(bootstrapper1PeerId),
-          addrs: [multiaddr(bootstrapper1Ma)]
+          addrs: [multiaddr(bootstrapper1Ma)],
         },
       ]
     }
@@ -167,15 +191,13 @@ import { plaintext } from '@libp2p/plaintext'
     const libp2pConfig: Libp2pOptions = {
       privateKey: pKey,
       addresses: {
-        listen: [
-          `/ip4/0.0.0.0/tcp/${port}`,
-        ]
+        listen: [`/ip4/0.0.0.0/tcp/${port}`],
       },
       transports: [
         tcp({
           maxConnections: 500,
           backlog: 30,
-        })
+        }),
       ],
       // connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
@@ -201,26 +223,25 @@ import { plaintext } from '@libp2p/plaintext'
           //   minTimeout: 10_000,
           // }
         }),
-      }
+      },
     }
 
-    if (encrypters === "noise") {
+    if (encrypters === 'noise') {
       libp2pConfig.connectionEncrypters = [noise()]
     } else {
       libp2pConfig.connectionEncrypters = [plaintext()]
     }
 
     // Create Libp2p instance
-    const server: Libp2pType = await createLibp2p(libp2pConfig) as Libp2pType
+    const server: Libp2pType = (await createLibp2p(libp2pConfig)) as Libp2pType
 
     // Set DHT mode
-    await server.services.lanDHT.setMode("server")
+    await server.services.lanDHT.setMode('server')
 
     // Subscribe to topic
     for (let i = 0; i < topics.length; i++) {
       server.services.pubsub.subscribe(topics[i])
     }
-
 
     // Initialize StatusServer
     const type = 'bootstrapper'
@@ -235,7 +256,10 @@ import { plaintext } from '@libp2p/plaintext'
     //   statusServer.message = toString(evt.detail.data)
     // })
 
-    console.log('Bootstrapper listening on multiaddr(s): ', server.getMultiaddrs().map((ma) => ma.toString()))
+    console.log(
+      'Bootstrapper listening on multiaddr(s): ',
+      server.getMultiaddrs().map((ma) => ma.toString()),
+    )
 
     const shutdown = async () => {
       // console.log('Shutting down Libp2p...')
@@ -245,7 +269,6 @@ import { plaintext } from '@libp2p/plaintext'
 
     process.on('SIGTERM', shutdown)
     process.on('SIGINT', shutdown)
-
   } catch (error) {
     console.error('An error occurred during initialization:', error)
     process.exit(1)

@@ -1,16 +1,16 @@
 import { PeerId } from '@libp2p/interface'
 import { Libp2pType } from './types.js'
-import { WebSocketServer } from 'ws';
-import { isEqual } from './helpers.js';
-import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types';
-import { GossipSub } from '@chainsafe/libp2p-gossipsub';
-import { fromString } from 'uint8arrays';
+import { WebSocketServer } from 'ws'
+import { isEqual } from './helpers.js'
+import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types'
+import { GossipSub } from '@chainsafe/libp2p-gossipsub'
+import { fromString } from 'uint8arrays'
 import { toString } from 'uint8arrays'
 import { multiaddr } from '@multiformats/multiaddr'
 import { SingleKadDHT } from '@libp2p/kad-dht'
 
 interface Stream {
-  protocol: string,
+  protocol: string
   direction: string
 }
 
@@ -36,21 +36,21 @@ type TopicsPeers = Record<string, string[]>
 
 export interface Update {
   containerId?: string
-  peerId?: string,
+  peerId?: string
   type?: string
-  subscribersList?: TopicsPeers,
-  pubsubPeers?: string[],
-  meshPeersList?: TopicsPeers,
-  fanoutList?: TopicsPeers,
-  libp2pPeers?: string[],
-  connections?: string[],
-  protocols?: string[],
-  streams?: Streams,
-  multiaddrs?: string[],
-  topics?: string[],
-  dhtPeers?: string[],
-  lastMessage?: string,
-  peerScores?: PeerScores,
+  subscribersList?: TopicsPeers
+  pubsubPeers?: string[]
+  meshPeersList?: TopicsPeers
+  fanoutList?: TopicsPeers
+  libp2pPeers?: string[]
+  connections?: string[]
+  protocols?: string[]
+  streams?: Streams
+  multiaddrs?: string[]
+  topics?: string[]
+  dhtPeers?: string[]
+  lastMessage?: string
+  peerScores?: PeerScores
   rtts?: RTTs
   connectTime?: number
 }
@@ -110,7 +110,7 @@ export class StatusServer {
     this.wssAlive = false
     this.started = false
 
-    this.wss = new WebSocketServer({ host: '0.0.0.0', port: 80 });
+    this.wss = new WebSocketServer({ host: '0.0.0.0', port: 80 })
     this.wssSetup(this.wss)
 
     server.addEventListener('connection:open', this.handleConnectionEvent)
@@ -126,6 +126,7 @@ export class StatusServer {
   }
 
   private handleSelfPeerUpdate = async (evt: CustomEvent) => {
+    console.log('handling self:peer:update')
     const update = await this.fullUpdate()
     await this.sendUpdate(update)
   }
@@ -135,7 +136,7 @@ export class StatusServer {
     const connections = connectionList.map((connection) => connection.remotePeer.toString())
 
     const update: Update = {
-      connections
+      connections,
     }
     await this.sendUpdate(update)
   }
@@ -149,7 +150,7 @@ export class StatusServer {
     this.message = toString(evt.detail.data)
 
     const update: Update = {
-      lastMessage: this.message
+      lastMessage: this.message,
     }
 
     await this.sendUpdate(update)
@@ -177,13 +178,13 @@ export class StatusServer {
 
     wss.on('close', function close() {
       console.log('stopping scheduled updates')
-      clearInterval(self.scheduleUpdate);
-    });
+      clearInterval(self.scheduleUpdate)
+    })
 
     wss.on('connection', async function connection(ws) {
-      console.log('new websocket connection')
-      ws.on('error', console.error);
-      ws.on('pong', self.heartbeat);
+      console.log('new status server websocket connection')
+      ws.on('error', console.error)
+      ws.on('pong', self.heartbeat)
       ws.on('message', async function incoming(msg) {
         const newMessage = JSON.parse(msg.toString())
 
@@ -197,14 +198,12 @@ export class StatusServer {
           }
 
           case 'info': {
-            // console.log(`${JSON.stringify((self.server.services.pubsub as GossipSub).dumpPeerScoreStats())}`)
-
             const update: Partial<Update> = {}
             self.lastPeerScores = self.getPeerScores()
             update.peerScores = self.lastPeerScores
 
             ws.send(JSON.stringify(update))
-            break;
+            break
           }
 
           case 'publish': {
@@ -217,7 +216,7 @@ export class StatusServer {
               try {
                 await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
                 const update: Update = {
-                  lastMessage: newMessage.message
+                  lastMessage: newMessage.message,
                 }
                 await self.sendUpdate(update)
               } catch (e) {
@@ -225,7 +224,7 @@ export class StatusServer {
               }
             }
 
-            break;
+            break
           }
 
           case 'connect': {
@@ -233,32 +232,37 @@ export class StatusServer {
             try {
               const ma = multiaddr(newMessage.message)
               console.log('dialing', ma)
-              const start = process.hrtime();
+              const start = process.hrtime()
               await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
               if (self.perfBytes && self.server.services.perf) {
                 try {
-                  for await (const output of self.server.services.perf.measurePerformance(ma, self.perfBytes, self.perfBytes, { reuseExistingConnection: true })) {
+                  for await (const output of self.server.services.perf.measurePerformance(
+                    ma,
+                    self.perfBytes,
+                    self.perfBytes,
+                    { reuseExistingConnection: true },
+                  )) {
                     console.log('perf', output)
                   }
                 } catch (err: any) {
                   console.error('Error measuring performance:', err)
                 }
               }
-              const [seconds, nanoseconds] = process.hrtime(start);
-              self.connectTime = seconds * 1000 + nanoseconds / 1e6;
+              const [seconds, nanoseconds] = process.hrtime(start)
+              self.connectTime = seconds * 1000 + nanoseconds / 1e6
               console.log('dialed', ma)
             } catch (e) {
               console.log(e)
             }
 
-            break;
+            break
           }
 
           default:
             console.log('unknown message type', newMessage.type)
-            break;
+            break
         }
-      });
+      })
 
       ws.send(JSON.stringify(await self.deltaUpdate()))
       self.scheduleUpdate = self.scheduleUpdates()
@@ -321,9 +325,9 @@ export class StatusServer {
       return {}
     }
 
-    let topicsPeers: TopicsPeers = {};
+    let topicsPeers: TopicsPeers = {}
 
-    (this.server.services.pubsub as GossipSub).fanout.forEach((v: Set<string>, k: string) => {
+    ;(this.server.services.pubsub as GossipSub).fanout.forEach((v: Set<string>, k: string) => {
       topicsPeers[k] = Array.from(v)
     })
 
@@ -352,7 +356,7 @@ export class StatusServer {
     }
 
     // @ts-ignore-next-line
-    return[...(this.server.services.lanDHT as SingleKadDHT).routingTable.kb.toIterable()];
+    return [...(this.server.services.lanDHT as SingleKadDHT).routingTable.kb.toIterable()]
   }
 
   private deltaUpdate = async (): Promise<Update> => {
@@ -369,7 +373,6 @@ export class StatusServer {
     if (type !== this.lastType) {
       this.lastType = type
       update.type = type
-
     }
 
     // const topics = this.topics
@@ -567,12 +570,27 @@ export class StatusServer {
   }
 
   private sendUpdate = async (update: Update) => {
-    if (update.type || update.subscribersList || update.pubsubPeers || update.meshPeersList || update.libp2pPeers || update.connections || update.protocols || update.streams || update.multiaddrs || update.dhtPeers || update.lastMessage || update.peerScores || update.rtts || update.connectTime) {
+    if (
+      update.type ||
+      update.subscribersList ||
+      update.pubsubPeers ||
+      update.meshPeersList ||
+      update.libp2pPeers ||
+      update.connections ||
+      update.protocols ||
+      update.streams ||
+      update.multiaddrs ||
+      update.dhtPeers ||
+      update.lastMessage ||
+      update.peerScores ||
+      update.rtts ||
+      update.connectTime
+    ) {
       update.containerId = this.containerId
 
       this.wss.clients.forEach((ws) => {
         if (ws.readyState === ws.OPEN) {
-          ws.send(JSON.stringify(update));
+          ws.send(JSON.stringify(update))
         } else {
           console.log('websocket not open')
         }
@@ -599,7 +617,7 @@ export class StatusServer {
   }
 
   private heartbeat = () => {
-    this.wssAlive = true;
+    this.wssAlive = true
   }
 
   private getRTTs = (): RTTs => {
@@ -621,28 +639,28 @@ export class StatusServer {
   }
 
   private getStreams = (): Streams => {
-    const connections = this.server.getConnections();
+    const connections = this.server.getConnections()
 
     return connections.reduce((accumulator, connection) => {
       // Ensure the connection has streams and a valid remotePeer
       if (connection.streams && connection.streams.length > 0 && connection.remotePeer) {
-        const peerId = connection.remotePeer.toString();
+        const peerId = connection.remotePeer.toString()
 
         // Initialize the array for this peerId if it doesn't exist
         if (!accumulator[peerId]) {
-          accumulator[peerId] = [];
+          accumulator[peerId] = []
         }
 
         // Map the streams to the desired format and append them to the peer's array
-        const mappedStreams: Stream[] = connection.streams.map(stream => ({
+        const mappedStreams: Stream[] = connection.streams.map((stream) => ({
           protocol: stream.protocol || '',
-          direction: stream.direction
-        }));
+          direction: stream.direction,
+        }))
 
-        accumulator[peerId].push(...mappedStreams);
+        accumulator[peerId].push(...mappedStreams)
       }
 
-      return accumulator;
-    }, {} as Streams); // Initialize accumulator as an empty object
-  };
+      return accumulator
+    }, {} as Streams) // Initialize accumulator as an empty object
+  }
 }
