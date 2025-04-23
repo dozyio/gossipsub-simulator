@@ -121,6 +121,7 @@ export default function Home() {
   const [selectedTopic, setSelectedTopics] = useState<string>('');
   const [selectedContainer, setSelectedContainer] = useState<string>('');
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
+  const [controllerOffline, setControllerOffline] = useState<boolean>(false)
 
   // network config
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev');
@@ -924,6 +925,7 @@ export default function Home() {
 
       ws.onopen = () => {
         console.log("Controller WebSocket: connected");
+        setControllerOffline(false)
         wsRef.current = ws; // Store the connected WebSocket instance
       };
 
@@ -957,6 +959,7 @@ export default function Home() {
       };
 
       ws.onerror = (error) => {
+        setControllerOffline(true)
         console.error("Controller WebSocket: Error:", error);
       };
 
@@ -1611,13 +1614,18 @@ export default function Home() {
 
         {/* Middle Section: Graph */}
         <div className="middle">
-          <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
+          {controllerOffline && (
+            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'red', fontSize: '20px' }}>
+              Controller offline
+            </div>
+          )}
+          {!controllerOffline && (<div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
             <h1>{mapType}</h1>
             <div>{`Total containers: ${containers.length}`}</div>
             <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
             <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
-          </div>
+          </div>)}
           <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
             <h6 style={{ marginBottom: '10px' }}>View:</h6>
             {mapView === 'graph' ? (
