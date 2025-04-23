@@ -48,6 +48,8 @@ make stop
 
 ### Related Projects and info
 
+* [Libp2p](https://github.com/libp2p/)
+
 * [Gossipsub Specs](https://github.com/libp2p/specs/tree/master/pubsub/gossipsub)
 
 * [Testground](https://github.com/testground/testground)
