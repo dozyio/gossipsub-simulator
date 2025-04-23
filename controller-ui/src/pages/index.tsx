@@ -1,173 +1,174 @@
-import Head from "next/head";
-import { FaCircleNodes } from "react-icons/fa6";
-import { FaRegCircle } from "react-icons/fa";
-import { useEffect, useRef, useState } from 'react';
+import Head from 'next/head'
+import { FaCircleNodes } from 'react-icons/fa6'
+import { FaRegCircle } from 'react-icons/fa'
+import { useEffect, useRef, useState } from 'react'
 
 interface PortMapping {
-  ip: string;
-  private_port: number;
-  public_port: number;
-  type: string;
+  ip: string
+  private_port: number
+  public_port: number
+  type: string
 }
 
 interface ContainerInfo {
-  id: string;
-  names: string[];
-  image: string;
-  status: string;
-  state: string;
-  ports: PortMapping[];
+  id: string
+  names: string[]
+  image: string
+  status: string
+  state: string
+  ports: PortMapping[]
 }
 
 interface Stream {
-  protocol: string;
-  direction: "inbound" | "outbound";
+  protocol: string
+  direction: 'inbound' | 'outbound'
 }
 
 interface StreamsByPeer {
-  [peerId: string]: Stream[];
+  [peerId: string]: Stream[]
 }
 
 interface PeerScores {
-  [peerId: string]: number;
+  [peerId: string]: number
 }
 
 // round trip times
 interface RRTs {
-  [peerId: string]: number;
+  [peerId: string]: number
 }
 
 interface ContainerData {
   containerId: string
-  id: string; // Unique identifier
-  peerId: string;
-  tcpdumping: boolean;
-  pubsubPeers: string[];
-  subscribersList: Record<string, string[]>;
-  libp2pPeers: string[];
-  meshPeersList: Record<string, string[]>;
+  id: string // Unique identifier
+  peerId: string
+  tcpdumping: boolean
+  pubsubPeers: string[]
+  subscribersList: Record<string, string[]>
+  libp2pPeers: string[]
+  meshPeersList: Record<string, string[]>
   fanoutList: Map<string, Set<string>>
-  dhtPeers: string[];
-  connections: string[]; // IDs of connected containers
-  protocols: string[];
-  multiaddrs: string[];
-  streams: StreamsByPeer;
-  topics: string[];
-  type: string;
-  lastMessage: string;
-  peerScores: PeerScores;
-  rtts: RRTs;
+  dhtPeers: string[]
+  connections: string[] // IDs of connected containers
+  protocols: string[]
+  multiaddrs: string[]
+  streams: StreamsByPeer
+  topics: string[]
+  type: string
+  lastMessage: string
+  peerScores: PeerScores
+  rtts: RRTs
   connectTime: number
-  x: number;
-  y: number;
-  vx: number; // Velocity X
-  vy: number; // Velocity Y
+  x: number
+  y: number
+  vx: number // Velocity X
+  vy: number // Velocity Y
 }
 
-type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams';
-type ClickType = 'kill' | 'info' | 'connect' | 'connectTo';
-type HoverType = 'peerscore' | 'rtt';
-type MapView = 'circle' | 'graph';
+type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams'
+type ClickType = 'kill' | 'info' | 'connect' | 'connectTo'
+type HoverType = 'peerscore' | 'rtt'
+type MapView = 'circle' | 'graph'
+type ControllerStatus = 'offline' | 'online' | 'connecting'
 
-const ENDPOINT = "http://localhost:8080"
-const WS_ENDPOINT = "ws://localhost:8080/ws"
-const DEBUG_STRING = 'DEBUG=*,*:trace,-*libp2p:peer-store:trace';
+const ENDPOINT = 'http://localhost:8080'
+const WS_ENDPOINT = 'ws://localhost:8080/ws'
+const DEBUG_STRING = 'DEBUG=*,*:trace,-*libp2p:peer-store:trace'
 
 // Container dimensions
-const CONTAINER_WIDTH = 800;
-const CONTAINER_HEIGHT = 800;
+const CONTAINER_WIDTH = 800
+const CONTAINER_HEIGHT = 800
 
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
   repulsion: 100_000, // Adjusted for CSE
-  attraction: 0.20, // Adjusted for CSE
+  attraction: 0.2, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
-  damping: 0.10, // Velocity damping factor
+  damping: 0.1, // Velocity damping factor
   maxVelocity: 80, // Maximum velocity cap
   naturalLength: 60, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
-  "pubsubPeers": DEFAULT_FORCES,
-  "libp2pPeers": {
+  pubsubPeers: DEFAULT_FORCES,
+  libp2pPeers: {
     ...DEFAULT_FORCES,
     naturalLength: 250,
   },
-  "meshPeers": DEFAULT_FORCES,
-  "dhtPeers": DEFAULT_FORCES,
-  "subscribers": DEFAULT_FORCES,
-  "connections": DEFAULT_FORCES,
-  "streams": DEFAULT_FORCES,
+  meshPeers: DEFAULT_FORCES,
+  dhtPeers: DEFAULT_FORCES,
+  subscribers: DEFAULT_FORCES,
+  connections: DEFAULT_FORCES,
+  streams: DEFAULT_FORCES,
 }
 
 export default function Home() {
   // peer stuff
-  const [containers, setContainers] = useState<ContainerInfo[]>([]);
-  const [imageName, setImageName] = useState<string>('gossip:dev');
-  const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({});
-  const [connectMultiaddr, setConnectMultiaddr] = useState<string>('');
+  const [containers, setContainers] = useState<ContainerInfo[]>([])
+  const [imageName, setImageName] = useState<string>('gossip:dev')
+  const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({})
+  const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
   // ui config
-  const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null);
-  const [converge, setConverge] = useState<boolean>(true);
-  const [clickType, setClickType] = useState<ClickType>('info');
-  const [hoverType, setHoverType] = useState<HoverType>('rtt');
-  const [autoPublish, setAutoPublish] = useState<boolean>(false);
-  const [protocols, setProtocols] = useState<string[]>([]);
-  const [topics, setTopics] = useState<string[]>([]);
-  const [selectedProtocols, setSelectedProtocols] = useState<string[]>([]);
-  const [selectedTopic, setSelectedTopics] = useState<string>('');
-  const [selectedContainer, setSelectedContainer] = useState<string>('');
+  const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null)
+  const [converge, setConverge] = useState<boolean>(true)
+  const [clickType, setClickType] = useState<ClickType>('info')
+  const [hoverType, setHoverType] = useState<HoverType>('rtt')
+  const [autoPublish, setAutoPublish] = useState<boolean>(false)
+  const [protocols, setProtocols] = useState<string[]>([])
+  const [topics, setTopics] = useState<string[]>([])
+  const [selectedProtocols, setSelectedProtocols] = useState<string[]>([])
+  const [selectedTopic, setSelectedTopics] = useState<string>('')
+  const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
-  const [controllerOffline, setControllerOffline] = useState<boolean>(false)
+  const [controllerStatus, setControllerStatus] = useState<ControllerStatus>('connecting')
 
   // network config
-  const [topicsName, setTopicsName] = useState<string>('pubXXX-dev');
-  const [debugContainer, setDebugContainer] = useState<boolean>(false);
-  const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING);
-  const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false);
-  const [gossipD, setGossipD] = useState<string>('8');
-  const [gossipDlo, setGossipDlo] = useState<string>('6');
-  const [gossipDhi, setGossipDhi] = useState<string>('12');
-  const [gossipDout, setGossipDout] = useState<string>('2');
-  const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false);
-  const [minLatency, setMinLatency] = useState<string>('20');
-  const [maxLatency, setMaxLatency] = useState<string>('300');
-  const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false);
-  const [packetLoss, setPacketLoss] = useState<string>('10');
+  const [topicsName, setTopicsName] = useState<string>('pubXXX-dev')
+  const [debugContainer, setDebugContainer] = useState<boolean>(false)
+  const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING)
+  const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false)
+  const [gossipD, setGossipD] = useState<string>('8')
+  const [gossipDlo, setGossipDlo] = useState<string>('6')
+  const [gossipDhi, setGossipDhi] = useState<string>('12')
+  const [gossipDout, setGossipDout] = useState<string>('2')
+  const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false)
+  const [minLatency, setMinLatency] = useState<string>('20')
+  const [maxLatency, setMaxLatency] = useState<string>('300')
+  const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false)
+  const [packetLoss, setPacketLoss] = useState<string>('10')
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
   const [disableNoise, setDisableNoise] = useState<boolean>(false)
 
   // graph stuff
-  const [edges, setEdges] = useState<{ from: string; to: string }[]>([]);
-  const prevEdgesRef = useRef(edges); // Store previous connections for comparison
-  const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({});
-  const [mapType, setMapType] = useState<MapType>('connections');
-  const [mapView, setMapView] = useState<MapView>('graph');
-  const stableCountRef = useRef(0); // Track stable state count
-  const stabilizedRef = useRef(false); // Track if graph is already stabilized
-  const intervalIdRef = useRef<number | null>(null); // Store interval ID
-  const [nodeSize, setNodeSize] = useState<number>(35);
-  const [minDistance, setMinDistance] = useState<number>(nodeSize * 4);
+  const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
+  const prevEdgesRef = useRef(edges) // Store previous connections for comparison
+  const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
+  const [mapType, setMapType] = useState<MapType>('connections')
+  const [mapView, setMapView] = useState<MapView>('graph')
+  const stableCountRef = useRef(0) // Track stable state count
+  const stabilizedRef = useRef(false) // Track if graph is already stabilized
+  const intervalIdRef = useRef<number | null>(null) // Store interval ID
+  const [nodeSize, setNodeSize] = useState<number>(35)
+  const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
 
   // controller websocket stuff
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeout = useRef<number | null>(null);
+  const wsRef = useRef<WebSocket | null>(null)
+  const reconnectTimeout = useRef<number | null>(null)
 
   const initializeContainerData = (runningContainers: ContainerInfo[]) => {
     setContainerData((prevData) => {
-      const newData: { [id: string]: ContainerData } = {};
+      const newData: { [id: string]: ContainerData } = {}
 
       runningContainers.forEach((container) => {
         if (prevData[container.id]) {
           // Retain existing data for running containers
-          newData[container.id] = prevData[container.id];
+          newData[container.id] = prevData[container.id]
         } else {
           // Initialize data for new containers
-          const { x, y } = getRandomPosition();
+          const { x, y } = getRandomPosition()
           newData[container.id] = {
             containerId: container.id,
             id: container.id,
@@ -193,15 +194,15 @@ export default function Home() {
             y,
             vx: 0,
             vy: 0,
-          };
+          }
         }
-      });
+      })
 
-      return newData;
-    });
-  };
+      return newData
+    })
+  }
 
-  const startContainer = async (image: string, env: string[], hostname: string = ""): Promise<ContainerInfo | void> => {
+  const startContainer = async (image: string, env: string[], hostname: string = ''): Promise<ContainerInfo | void> => {
     try {
       const response = await fetch(`${ENDPOINT}/containers/create`, {
         method: 'POST',
@@ -214,37 +215,43 @@ export default function Home() {
           hostname,
           port: 80,
         }),
-      });
+      })
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error starting container: ${errorText}`);
+        const errorText = await response.text()
+        throw new Error(`Error starting container: ${errorText}`)
       }
 
-      const data = await response.json();
-      console.log('Container started:', data);
+      const data = await response.json()
+      console.log('Container started:', data)
       // No need to call fetchContainers here since WebSocket will handle updates now
-      return data;
+      return data
     } catch (error) {
-      console.error('Error starting container:', error);
+      console.error('Error starting container:', error)
     }
-  };
+  }
 
   const envSetter = (env: string[], isBootstrap: boolean = false): string[] => {
     env.push(`TOPICS=${topicsName}`)
 
     if (debugContainer) {
-      env.push(debugStr);
+      env.push(debugStr)
     }
 
     if (hasLatencySettings || hasPacketLossSetting) {
-      let str = "NETWORK_CONFIG="
+      let str = 'NETWORK_CONFIG='
 
       if (hasLatencySettings && minLatency !== '0' && maxLatency !== '0') {
-        str = `${str}delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`;
+        str = `${str}delay=${Math.floor(Math.random() * (parseInt(maxLatency) - parseInt(minLatency)) + parseInt(minLatency))}ms`
       }
 
-      if (hasLatencySettings && minLatency !== '0' && maxLatency !== '0' && hasPacketLossSetting && packetLoss !== '0') {
+      if (
+        hasLatencySettings &&
+        minLatency !== '0' &&
+        maxLatency !== '0' &&
+        hasPacketLossSetting &&
+        packetLoss !== '0'
+      ) {
         str = `${str} `
       }
 
@@ -258,16 +265,16 @@ export default function Home() {
     if (isBootstrap) {
       // https://github.com/libp2p/specs/blob/master/pubsub/gossipsub/gossipsub-v1.1.md#recommendations-for-network-operators
       // D=D_lo=D_hi=D_out=0
-      env.push('GOSSIP_D=0');
-      env.push('GOSSIP_DLO=0');
-      env.push('GOSSIP_DHI=0');
-      env.push('GOSSIP_DOUT=0');
+      env.push('GOSSIP_D=0')
+      env.push('GOSSIP_DLO=0')
+      env.push('GOSSIP_DHI=0')
+      env.push('GOSSIP_DOUT=0')
     } else {
       if (hasGossipDSettings) {
-        env.push(`GOSSIP_D=${gossipD}`);
-        env.push(`GOSSIP_DLO=${gossipDlo}`);
-        env.push(`GOSSIP_DHI=${gossipDhi}`);
-        env.push(`GOSSIP_DOUT=${gossipDout}`);
+        env.push(`GOSSIP_D=${gossipD}`)
+        env.push(`GOSSIP_DLO=${gossipDlo}`)
+        env.push(`GOSSIP_DHI=${gossipDhi}`)
+        env.push(`GOSSIP_DOUT=${gossipDout}`)
       }
     }
 
@@ -284,49 +291,43 @@ export default function Home() {
 
   const handleStartBootstrap1 = async () => {
     // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
-    let env = [
-      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1'
-    ];
+    let env = ['SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1']
 
     env = envSetter(env, true)
 
-    await startContainer('bootstrapper:dev', env, "bootstrapper1");
-  };
+    await startContainer('bootstrapper:dev', env, 'bootstrapper1')
+  }
 
   const handleStartBootstrap2 = async () => {
     // 12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw
-    let env = [
-      'SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2'
-    ];
+    let env = ['SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2']
 
     env = envSetter(env, true)
 
-    await startContainer('bootstrapper:dev', env, "bootstrapper2");
-  };
+    await startContainer('bootstrapper:dev', env, 'bootstrapper2')
+  }
 
   // Function to start a new container
   const handleStartContainer = async () => {
-    const env = envSetter([]);
+    const env = envSetter([])
 
-    await startContainer(imageName, env);
-  };
+    await startContainer(imageName, env)
+  }
 
   const handleStartXContainers = async (amount = 12) => {
     try {
-      const promises = [];
+      const promises = []
       for (let i = 0; i < amount; i++) {
-        const env = envSetter([]);
+        const env = envSetter([])
 
-        promises.push(
-          startContainer(imageName, env)
-        );
+        promises.push(startContainer(imageName, env))
       }
-      await Promise.all(promises);
+      await Promise.all(promises)
       // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
-      console.error('Error starting containers:', error);
+      console.error('Error starting containers:', error)
     }
-  };
+  }
 
   const stopContainer = async (containerID: string) => {
     try {
@@ -338,56 +339,56 @@ export default function Home() {
         body: JSON.stringify({
           container_id: containerID,
         }),
-      });
+      })
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error stopping container: ${errorText}`);
+        const errorText = await response.text()
+        throw new Error(`Error stopping container: ${errorText}`)
       }
 
-      console.log(`Container ${containerID} stopped`);
+      console.log(`Container ${containerID} stopped`)
       // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
-      console.error('Error stopping container:', error);
+      console.error('Error stopping container:', error)
     }
-  };
+  }
 
   const stopAllContainers = async () => {
     try {
       const response = await fetch(`${ENDPOINT}/containers/stopall`, {
         method: 'POST',
-      });
+      })
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error stopping all containers: ${errorText}`);
+        const errorText = await response.text()
+        throw new Error(`Error stopping all containers: ${errorText}`)
       }
 
       // No need to fetchContainers here, WebSocket updates container list
     } catch (error) {
-      console.error('Error stopping all containers:', error);
+      console.error('Error stopping all containers:', error)
     }
-  };
+  }
 
   const stopXContainers = async (amount = 5) => {
     // Only stop gossip containers
-    const gossipContainers = containers.filter((c) => c.image.includes('gossip'));
-    const shuffled = gossipContainers.slice();
+    const gossipContainers = containers.filter((c) => c.image.includes('gossip'))
+    const shuffled = gossipContainers.slice()
 
     for (let i = shuffled.length - 1; i > 0; i--) {
       // Generate a random index from 0 to i
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(Math.random() * (i + 1))
       // Swap elements at indices i and j
-      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      ;[shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]]
     }
 
     // Return the first x elements
-    const toStop = shuffled.slice(0, amount);
+    const toStop = shuffled.slice(0, amount)
 
     for (const container of toStop) {
       try {
         if (containerData[container.id]?.type === 'bootstrapper') {
-          continue;
+          continue
         }
 
         const response = await fetch(`${ENDPOINT}/containers/stop`, {
@@ -398,53 +399,52 @@ export default function Home() {
           body: JSON.stringify({
             container_id: container.id,
           }),
-        });
+        })
 
         if (!response.ok) {
-          const errorText = await response.text();
-          throw new Error(`Error stopping container: ${errorText}`);
+          const errorText = await response.text()
+          throw new Error(`Error stopping container: ${errorText}`)
         }
-
       } catch (error) {
-        console.error('Error stopping container:', error);
+        console.error('Error stopping container:', error)
       }
     }
 
     // No need to fetchContainers here, WebSocket updates container list
-  };
+  }
 
-  const getLogs = async(containerId: string) => {
-  try {
-    const res = await fetch(`${ENDPOINT}/logs`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ container_id: containerId }),
-    });
-    if (!res.ok) {
-      console.error('Error fetching logs:', res.status);
-      return;
+  const getLogs = async (containerId: string) => {
+    try {
+      const res = await fetch(`${ENDPOINT}/logs`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ container_id: containerId }),
+      })
+      if (!res.ok) {
+        console.error('Error fetching logs:', res.status)
+        return
+      }
+
+      const text = await res.text()
+      console.log(text)
+      const blob = new Blob([text], { type: 'text/plain' })
+
+      // Create a download link and click it
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${containerId}.log`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(url)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      console.error('Error downloading logs:', err)
     }
-
-    const text = await res.text();
-    console.log(text);
-    const blob = new Blob([text], { type: 'text/plain' });
-
-    // Create a download link and click it
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${containerId}.log`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    window.URL.revokeObjectURL(url);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } catch (err: any) {
-    console.error('Error downloading logs:', err);
-  }
   }
 
-  const startTCPDump = async(containerId: string) => {
+  const startTCPDump = async (containerId: string) => {
     try {
       const res = await fetch(`${ENDPOINT}/tcpdump/start`, {
         method: 'POST',
@@ -454,16 +454,16 @@ export default function Home() {
         body: JSON.stringify({
           container_id: containerId,
         }),
-      });
+      })
 
       if (!res.ok) {
-        console.log("Error starting tcpdump:", res.status);
-        throw new Error(`Error starting tcpdump ${res.status}`);
+        console.log('Error starting tcpdump:', res.status)
+        throw new Error(`Error starting tcpdump ${res.status}`)
       }
 
       setContainerData((prevData) => {
-        const existing = prevData[containerId];
-        if (!existing) return prevData;
+        const existing = prevData[containerId]
+        if (!existing) return prevData
 
         return {
           ...prevData,
@@ -471,11 +471,11 @@ export default function Home() {
             ...existing,
             tcpdumping: true,
           },
-        };
-      });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any) { 
-      console.log("Error starting tcpdump:", err);
+        }
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } catch (err: any) {
+      console.log('Error starting tcpdump:', err)
     }
   }
 
@@ -485,16 +485,16 @@ export default function Home() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          container_id: containerId
+          container_id: containerId,
         }),
-      });
+      })
       if (!res.ok) {
-        throw new Error(`Status ${res.status}`);
+        throw new Error(`Status ${res.status}`)
       }
 
       setContainerData((prevData) => {
-        const existing = prevData[containerId];
-        if (!existing) return prevData;
+        const existing = prevData[containerId]
+        if (!existing) return prevData
 
         return {
           ...prevData,
@@ -502,23 +502,23 @@ export default function Home() {
             ...existing,
             tcpdumping: false,
           },
-        };
-      });
+        }
+      })
 
-      const blob = await res.blob();
-      const downloadUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = downloadUrl;
-      a.download = `${containerId}.pcap`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(downloadUrl);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const blob = await res.blob()
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = `${containerId}.pcap`
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      window.URL.revokeObjectURL(downloadUrl)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
-      console.error('Error stopping tcpdump:', err);
+      console.error('Error stopping tcpdump:', err)
     }
-  };
+  }
 
   // const getRandomColor = () => {
   //   const letters = '0123456789ABCDEF';
@@ -542,7 +542,7 @@ export default function Home() {
 
     const body: Body = {
       amount: amount,
-      topic: selectedTopic
+      topic: selectedTopic,
     }
 
     if (containerId !== '') {
@@ -555,27 +555,26 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body)
-      });
+        body: JSON.stringify(body),
+      })
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error publishing: ${errorText}`);
+        const errorText = await response.text()
+        throw new Error(`Error publishing: ${errorText}`)
       }
-
     } catch (error) {
-      console.error('Error publishing:', error);
+      console.error('Error publishing:', error)
     }
-  };
+  }
 
   const showContainerInfo = (containerId: string) => {
-    console.log('Current containerData:', containerData);
+    console.log('Current containerData:', containerData)
 
-    const data = containerData[containerId];
+    const data = containerData[containerId]
     if (data) {
-      console.log(`Container Data for ID ${containerId}:`, data);
+      console.log(`Container Data for ID ${containerId}:`, data)
     } else {
-      console.log(`No data available for container ID ${containerId}`);
+      console.log(`No data available for container ID ${containerId}`)
     }
     // try {
     //   // Extract the WebSocket instance
@@ -596,25 +595,25 @@ export default function Home() {
     // } catch (error) {
     //   console.error('Error sending info message:', error);
     // }
-  };
+  }
 
-  const connectContainers = async(srcContainerId: string, dstContainerId: string) => {
+  const connectContainers = async (srcContainerId: string, dstContainerId: string) => {
     if (containers.length === 0) {
       return
     }
 
     // only supports ipv4 for now
-    const firstNonLoopback = containerData[dstContainerId]?.multiaddrs.find(addr => {
-      const ipMatch = addr.match(/\/ip4\/([\d.]+)/);
+    const firstNonLoopback = containerData[dstContainerId]?.multiaddrs.find((addr) => {
+      const ipMatch = addr.match(/\/ip4\/([\d.]+)/)
       if (ipMatch && ipMatch[1]) {
-        const ip = ipMatch[1];
-        return ip !== '127.0.0.1';
+        const ip = ipMatch[1]
+        return ip !== '127.0.0.1'
       }
-      return false;
-    });
+      return false
+    })
 
     if (!firstNonLoopback) {
-      console.log('No non-loopback IPv4 address found for container', dstContainerId);
+      console.log('No non-loopback IPv4 address found for container', dstContainerId)
       return
     }
 
@@ -633,7 +632,7 @@ export default function Home() {
 
     const body: Body = {
       containerId: srcContainerId,
-      toMultiaddr
+      toMultiaddr,
     }
 
     try {
@@ -644,86 +643,84 @@ export default function Home() {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body)
-      });
+        body: JSON.stringify(body),
+      })
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Error connecting: ${errorText}`);
+        const errorText = await response.text()
+        throw new Error(`Error connecting: ${errorText}`)
       }
-
     } catch (error) {
-      console.error('Error connecting:', error);
+      console.error('Error connecting:', error)
     }
-  };
-
+  }
 
   const getLabel = (containerId: string): string => {
-    const container = containers.find((c) => c.id === containerId);
-    const node = containerData[containerId];
+    const container = containers.find((c) => c.id === containerId)
+    const node = containerData[containerId]
 
     if (!container || !node) {
-      return '';
+      return ''
     }
 
-    let label = container.image.split(':')[0];
+    let label = container.image.split(':')[0]
 
     // Determine the source of interaction: Hovered or Selected
-    const sourceContainerId = hoveredContainerId || selectedContainer;
+    const sourceContainerId = hoveredContainerId || selectedContainer
 
     if (sourceContainerId) {
-      const sourceData = containerData[sourceContainerId];
+      const sourceData = containerData[sourceContainerId]
       if (sourceData) {
-        let relatedPeerIds: string[] = [];
-        let relatedContainerIds: string[] = [];
+        let relatedPeerIds: string[] = []
+        let relatedContainerIds: string[] = []
 
         switch (mapType) {
           case 'streams':
-            relatedPeerIds = Object.keys(sourceData.streams); // Peer IDs from streams
+            relatedPeerIds = Object.keys(sourceData.streams) // Peer IDs from streams
             break
           case 'connections':
-            relatedPeerIds = sourceData[mapType];
+            relatedPeerIds = sourceData[mapType]
             break
           case 'pubsubPeers':
-            relatedPeerIds = sourceData[mapType];
+            relatedPeerIds = sourceData[mapType]
             break
           case 'meshPeers':
-            relatedPeerIds = sourceData['meshPeersList'][selectedTopic];
+            relatedPeerIds = sourceData['meshPeersList'][selectedTopic]
             break
           case 'subscribers':
-            relatedPeerIds = sourceData['subscribersList'][selectedTopic];
+            relatedPeerIds = sourceData['subscribersList'][selectedTopic]
             break
           case 'libp2pPeers':
-            relatedPeerIds = sourceData[mapType];
+            relatedPeerIds = sourceData[mapType]
             break
           case 'dhtPeers':
-            relatedPeerIds = sourceData[mapType];
+            relatedPeerIds = sourceData[mapType]
             break
 
           default:
-            relatedPeerIds = sourceData[mapType]; // Peer IDs
+            relatedPeerIds = sourceData[mapType] // Peer IDs
             break
         }
 
         // Map peer IDs to container IDs if necessary
         if (relatedPeerIds?.length > 0) {
-          relatedContainerIds = Object.keys(containerData).filter(
-            (id) => relatedPeerIds.includes(containerData[id]?.peerId)
-          );
+          relatedContainerIds = Object.keys(containerData).filter((id) =>
+            relatedPeerIds.includes(containerData[id]?.peerId),
+          )
         }
 
         // Check if the current container is related
         // if (relatedContainerIds.includes(container.id)) {
-        const peerId = node.peerId;
+        const peerId = node.peerId
         if (hoverType === 'peerscore') {
-          const score = sourceData?.peerScores[peerId];
+          const score = sourceData?.peerScores[peerId]
           if (score !== undefined) {
-            label = String(score.toFixed(1)); // Use peerScore for label
+            label = String(score.toFixed(1)) // Use peerScore for label
           }
         } else if (hoverType === 'rtt') {
-          const rtt = sourceData?.rtts[peerId];
+          const rtt = sourceData?.rtts[peerId]
           if (rtt !== undefined) {
-            label = String(rtt); // Use rtt for label
+            label = String(rtt) // Use rtt for label
           }
         }
         // }
@@ -735,68 +732,68 @@ export default function Home() {
 
   const handleClickType = () => {
     if (clickType === 'kill') {
-      setClickType('info');
+      setClickType('info')
     }
 
     if (clickType === 'info') {
-      setClickType('connect');
+      setClickType('connect')
     }
 
     if (clickType === 'connect') {
-      setClickType('kill');
+      setClickType('kill')
     }
 
     if (clickType === 'connectTo') {
-      setClickType('connect');
+      setClickType('connect')
     }
-  };
+  }
 
   const handleContainerClick = (containerId: string) => {
     if (clickType === 'kill') {
-      stopContainer(containerId);
+      stopContainer(containerId)
     }
 
     if (clickType === 'info') {
       if (selectedContainer == containerId) {
-        setSelectedContainer('');
-        showContainerInfo('');
+        setSelectedContainer('')
+        showContainerInfo('')
       } else {
-        setSelectedContainer(containerId);
-        showContainerInfo(containerId);
+        setSelectedContainer(containerId)
+        showContainerInfo(containerId)
       }
     }
 
     if (clickType === 'connect') {
-      setSelectedContainer(containerId);
-      showContainerInfo(containerId);
-      setClickType('connectTo');
+      setSelectedContainer(containerId)
+      showContainerInfo(containerId)
+      setClickType('connectTo')
     }
 
     if (clickType === 'connectTo') {
-      connectContainers(selectedContainer, containerId);
+      connectContainers(selectedContainer, containerId)
       setClickType('connect')
     }
-  };
+  }
 
   const handleHoverType = () => {
     if (hoverType === 'peerscore') {
-      setHoverType('rtt');
+      setHoverType('rtt')
     } else {
-      setHoverType('peerscore');
+      setHoverType('peerscore')
     }
-  };
+  }
 
   const handleProtocolSelect = (protocol: string) => {
     setSelectedProtocols((prevSelected) => {
       if (prevSelected.includes(protocol)) {
         // Deselect the protocol
-        return prevSelected.filter((p) => p !== protocol);
+        return prevSelected.filter((p) => p !== protocol)
       } else {
         // Select the protocol
-        return [...prevSelected, protocol];
+        return [...prevSelected, protocol]
       }
-    });
-  };
+    })
+  }
 
   const handleTopicSelect = (topic: string) => {
     setSelectedTopics(topic)
@@ -804,11 +801,11 @@ export default function Home() {
 
   const getBackgroundColor = (containerId: string) => {
     if (converge) {
-      return containerData[containerId]?.lastMessage;
+      return containerData[containerId]?.lastMessage
     } else {
-      return `#${containerId.substring(0, 6)}`;
+      return `#${containerId.substring(0, 6)}`
     }
-  };
+  }
 
   const getOpacity = (containerId: string) => {
     if (containerData[containerId]?.multiaddrs.length >= 1) {
@@ -816,44 +813,42 @@ export default function Home() {
     }
 
     return 0.65 // semi transparent when no multiaddrs
-  };
+  }
 
   const getBorderStyle = (containerId: string) => {
     if (selectedContainer === containerId) {
-      return '2px solid White';
+      return '2px solid White'
     }
 
-    return '0px';
-  };
+    return '0px'
+  }
 
   const getBorderRadius = (containerId: string) => {
     if (containerData[containerId]?.type === 'bootstrapper') {
-      return '4px';
+      return '4px'
     }
 
-    return '50%';
-  };
+    return '50%'
+  }
 
   // Utility function to generate random positions within the container
   const getRandomPosition = () => ({
     x: Math.random() * (CONTAINER_WIDTH - nodeSize) + nodeSize / 2,
     y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
-  });
+  })
 
   const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
-    if (prevConnections.length !== newConnections.length) return false;
+    if (prevConnections.length !== newConnections.length) return false
     return prevConnections.every(
-      (conn, index) =>
-        conn.from === newConnections[index].from &&
-        conn.to === newConnections[index].to
-    );
-  };
+      (conn, index) => conn.from === newConnections[index].from && conn.to === newConnections[index].to,
+    )
+  }
 
   // Function to handle WebSocket messages and update containerData
   const handleWebSocketMessage = (data: ContainerData) => {
     setContainerData((prevData) => {
-      const existing = prevData[data.containerId];
-      if (!existing) return prevData; // If container is not in the data, skip
+      const existing = prevData[data.containerId]
+      if (!existing) return prevData // If container is not in the data, skip
 
       // Merge new data with existing containerData while preserving positions and velocities
       return {
@@ -866,49 +861,49 @@ export default function Home() {
           // vx: existing.vx,
           // vy: existing.vy,
         },
-      };
-    });
+      }
+    })
 
     // Extract protocols from streams
     if (data.streams) {
-      const newProtocols = new Set<string>();
+      const newProtocols = new Set<string>()
       Object.values(data.streams).forEach((streamsArray) => {
         streamsArray.forEach((stream) => {
-          newProtocols.add(stream.protocol);
-        });
-      });
+          newProtocols.add(stream.protocol)
+        })
+      })
 
       // Update the protocols state with new unique protocols
       setProtocols((prevProtocols) => {
-        const updatedProtocols = [...prevProtocols];
+        const updatedProtocols = [...prevProtocols]
         newProtocols.forEach((protocol) => {
           if (!updatedProtocols.includes(protocol)) {
-            updatedProtocols.push(protocol);
+            updatedProtocols.push(protocol)
           }
-        });
-        return updatedProtocols;
-      });
+        })
+        return updatedProtocols
+      })
     }
 
     // Update topics
     if (data.topics) {
-      const newTopics = new Set<string>();
+      const newTopics = new Set<string>()
       data.topics.forEach((topic) => {
-        newTopics.add(topic);
-      });
+        newTopics.add(topic)
+      })
 
       // Update the protocols state with new unique protocols
       setTopics((prevTopics) => {
-        const updatedTopics = [...prevTopics];
+        const updatedTopics = [...prevTopics]
         newTopics.forEach((topic) => {
           if (!updatedTopics.includes(topic)) {
-            updatedTopics.push(topic);
+            updatedTopics.push(topic)
           }
-        });
-        return updatedTopics;
-      });
+        })
+        return updatedTopics
+      })
     }
-  };
+  }
 
   // WebSocket for controller
   // Receives containers list and node updates
@@ -916,114 +911,108 @@ export default function Home() {
     const connectWebSocket = () => {
       // Check if a WebSocket connection already exists
       if (wsRef.current && wsRef.current.readyState !== WebSocket.CLOSED) {
-        console.log("WebSocket is already connected or connecting.");
-        return; // Do not create a new connection if one already exists
+        console.log('WebSocket is already connected or connecting.')
+        return // Do not create a new connection if one already exists
       }
 
-      console.log("Attempting to connect WebSocket...");
-      const ws = new WebSocket(WS_ENDPOINT);
+      console.log('Attempting to connect WebSocket...')
+      setControllerStatus('connecting')
+      const ws = new WebSocket(WS_ENDPOINT)
 
       ws.onopen = () => {
-        console.log("Controller WebSocket: connected");
-        setControllerOffline(false)
-        wsRef.current = ws; // Store the connected WebSocket instance
-      };
+        console.log('Controller WebSocket: connected')
+        setControllerStatus('online')
+        wsRef.current = ws // Store the connected WebSocket instance
+      }
 
       ws.onmessage = (event) => {
         try {
-          const json = JSON.parse(event.data);
+          const json = JSON.parse(event.data)
           switch (json.mType) {
-            case "containerList":
-              const updatedContainers: ContainerInfo[] = json.data;
-              const runningContainers = updatedContainers.filter(
-                (c) => c.state === "running"
-              );
-              setContainers(runningContainers);
-              initializeContainerData(runningContainers);
-              break;
-            case "nodeStatus":
-              handleWebSocketMessage(json);
-              break;
+            case 'containerList':
+              const updatedContainers: ContainerInfo[] = json.data
+              const runningContainers = updatedContainers.filter((c) => c.state === 'running')
+              setContainers(runningContainers)
+              initializeContainerData(runningContainers)
+              break
+            case 'nodeStatus':
+              handleWebSocketMessage(json)
+              break
             default:
-              console.log(
-                "Controller WebSocket: unknown type",
-                json.mType
-              );
+              console.log('Controller WebSocket: unknown type', json.mType)
           }
         } catch (error) {
-          console.error(
-            "Controller WebSocket: Error parsing message:",
-            error
-          );
+          console.error('Controller WebSocket: Error parsing message:', error)
         }
-      };
+      }
 
       ws.onerror = (error) => {
-        setControllerOffline(true)
-        console.error("Controller WebSocket: Error:", error);
-      };
+        setControllerStatus('offline')
+        console.error('Controller WebSocket: Error:', error)
+      }
 
       ws.onclose = () => {
-        console.log("Controller WebSocket: closed. Attempting to reconnect...");
-        attemptReconnect();
-      };
+        console.log('Controller WebSocket: closed. Attempting to reconnect...')
+        attemptReconnect()
+      }
 
-      wsRef.current = ws; // Store the WebSocket instance
-    };
+      wsRef.current = ws // Store the WebSocket instance
+    }
 
     const attemptReconnect = () => {
       if (reconnectTimeout.current) {
-        clearTimeout(reconnectTimeout.current); // Clear any existing reconnect timeouts
+        clearTimeout(reconnectTimeout.current) // Clear any existing reconnect timeouts
       }
       reconnectTimeout.current = window.setTimeout(() => {
-        connectWebSocket();
-      }, 3000); // Attempt reconnect after 3000ms
-    };
+        connectWebSocket()
+      }, 3000) // Attempt reconnect after 3000ms
+    }
 
-    connectWebSocket(); // Initial connection
+    connectWebSocket() // Initial connection
 
     return () => {
       if (reconnectTimeout.current) {
-        clearTimeout(reconnectTimeout.current);
+        clearTimeout(reconnectTimeout.current)
       }
-      wsRef.current?.close(); // Close the WebSocket connection on unmount
-    };
-  }, []);
+
+      wsRef.current?.close() // Close the WebSocket connection on unmount
+    }
+  }, [])
 
   // Update edges based on current containerData and mapType
   useEffect(() => {
-    const newEdges: { from: string; to: string }[] = [];
+    const newEdges: { from: string; to: string }[] = []
 
     Object.keys(containerData).forEach((containerId) => {
-      const data = containerData[containerId];
+      const data = containerData[containerId]
 
-      let connectionList: string[] = [];
+      let connectionList: string[] = []
 
       switch (mapType) {
         case 'streams':
-          const streamsByPeer = data.streams;
+          const streamsByPeer = data.streams
           if (streamsByPeer && typeof streamsByPeer === 'object') {
-            connectionList = Object.keys(streamsByPeer);
+            connectionList = Object.keys(streamsByPeer)
           }
           break
         case 'subscribers': {
-          const mapValue = data['subscribersList'][selectedTopic];
+          const mapValue = data['subscribersList'][selectedTopic]
           if (Array.isArray(mapValue)) {
-            connectionList = mapValue;
+            connectionList = mapValue
           }
           break
         }
         case 'meshPeers': {
-          const mapValue = data['meshPeersList'][selectedTopic];
+          const mapValue = data['meshPeersList'][selectedTopic]
           if (Array.isArray(mapValue)) {
-            connectionList = mapValue;
+            connectionList = mapValue
           }
           break
         }
         default: {
-          const mapValue = data[mapType];
+          const mapValue = data[mapType]
           if (Array.isArray(mapValue)) {
-            connectionList = mapValue;
+            connectionList = mapValue
           }
           break
         }
@@ -1031,20 +1020,18 @@ export default function Home() {
 
       connectionList.forEach((peerId) => {
         // Find the container that has this peerId
-        const targetContainerId = Object.keys(containerData).find(
-          (id) => containerData[id]?.peerId === peerId
-        );
+        const targetContainerId = Object.keys(containerData).find((id) => containerData[id]?.peerId === peerId)
 
         if (targetContainerId) {
           // Avoid duplicate edges
           const exists = newEdges.some(
             (conn) =>
               (conn.from === containerId && conn.to === targetContainerId) ||
-              (conn.from === targetContainerId && conn.to === containerId)
-          );
+              (conn.from === targetContainerId && conn.to === containerId),
+          )
 
           if (!exists) {
-            newEdges.push({ from: containerId, to: targetContainerId });
+            newEdges.push({ from: containerId, to: targetContainerId })
           }
         } else {
           // TODO
@@ -1060,18 +1047,15 @@ export default function Home() {
           //   newEdges.push({ from: containerId, to: peerId});
           // }
         }
-      });
-    });
+      })
+    })
 
-    const edgesHaveChanged = !areEdgesEqual(
-      prevEdgesRef.current,
-      newEdges
-    );
+    const edgesHaveChanged = !areEdgesEqual(prevEdgesRef.current, newEdges)
 
     if (edgesHaveChanged) {
-      setEdges(newEdges);
+      setEdges(newEdges)
     }
-  }, [containerData, mapType]);
+  }, [containerData, mapType])
 
   // Removed the polling-based fetchContainers interval. We rely on WebSocket updates now.
 
@@ -1079,425 +1063,346 @@ export default function Home() {
   useEffect(() => {
     const interval = setInterval(() => {
       if (autoPublish) {
-        publishToTopic('', 1);
+        publishToTopic('', 1)
       }
-    }, Number(autoPublishInterval));
-    return () => clearInterval(interval);
-  }, [autoPublish, containers]);
+    }, Number(autoPublishInterval))
+    return () => clearInterval(interval)
+  }, [autoPublish, containers])
 
   // Update node size based on number of containers
   useEffect(() => {
-    const minSize = 35; // Minimum node size
-    const maxSize = 45; // Maximum node size
-    const scalingFactor = 5; // Adjust this to control sensitivity
+    const minSize = 35 // Minimum node size
+    const maxSize = 45 // Maximum node size
+    const scalingFactor = 5 // Adjust this to control sensitivity
 
     if (containers.length === 0) {
-      setNodeSize(maxSize); // Default size when no containers
-      return;
+      setNodeSize(maxSize) // Default size when no containers
+      return
     }
 
     // Dynamically scale the node size
-    const size = Math.max(
-      minSize,
-      Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor)
-    );
+    const size = Math.max(minSize, Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor))
 
-    setNodeSize(size);
-  }, [containers]);
+    setNodeSize(size)
+  }, [containers])
 
   // Update min distance
   useEffect(() => {
-    const minDistanceMin = nodeSize * 2; // Minimum allowable distance
-    const minDistanceMax = nodeSize * 4; // Maximum allowable distance
-    const scalingFactor = 1; // Adjust for sensitivity
+    const minDistanceMin = nodeSize * 2 // Minimum allowable distance
+    const minDistanceMax = nodeSize * 4 // Maximum allowable distance
+    const scalingFactor = 1 // Adjust for sensitivity
 
     if (containers.length === 0) {
-      setMinDistance(minDistanceMax); // Default when no containers
-      return;
+      setMinDistance(minDistanceMax) // Default when no containers
+      return
     }
 
     // Dynamically scale the minDistance
     const distance = Math.max(
       minDistanceMin,
-      Math.min(
-        minDistanceMax,
-        minDistanceMax - Math.log(containers.length) * scalingFactor
-      )
-    );
+      Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
+    )
 
-    setMinDistance(distance);
-  }, [containers, nodeSize]);
+    setMinDistance(distance)
+  }, [containers, nodeSize])
 
   // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
     // console.log('useEffect triggered');
-    if (mapView !== 'graph') return;
+    if (mapView !== 'graph') return
 
-    const centerX = CONTAINER_WIDTH / 2;
-    const centerY = CONTAINER_HEIGHT / 2;
-    const VELOCITY_THRESHOLD = 0.015; // Threshold for stability
-    const STABLE_ITERATIONS = 25; // Number of iterations required to consider stable
+    const centerX = CONTAINER_WIDTH / 2
+    const centerY = CONTAINER_HEIGHT / 2
+    const VELOCITY_THRESHOLD = 0.015 // Threshold for stability
+    const STABLE_ITERATIONS = 25 // Number of iterations required to consider stable
 
-    const edgesHaveChanged = !areEdgesEqual(
-      prevEdgesRef.current,
-      edges
-    );
+    const edgesHaveChanged = !areEdgesEqual(prevEdgesRef.current, edges)
 
     if (edgesHaveChanged) {
-      console.log('Edges changed. Resetting stabilization.');
-      stableCountRef.current = 0; // Reset stability count
-      stabilizedRef.current = false; // Mark the graph as not stabilized
-      prevEdgesRef.current = edges; // Update stored edges
+      console.log('Edges changed. Resetting stabilization.')
+      stableCountRef.current = 0 // Reset stability count
+      stabilizedRef.current = false // Mark the graph as not stabilized
+      prevEdgesRef.current = edges // Update stored edges
       if (intervalIdRef.current !== null) {
-        window.clearInterval(intervalIdRef.current); // Clear the existing interval
+        window.clearInterval(intervalIdRef.current) // Clear the existing interval
       }
     }
 
     const interval = window.setInterval(() => {
       if (stabilizedRef.current) {
-        window.clearInterval(intervalIdRef.current!); // Stop the interval if already stabilized
-        return;
+        window.clearInterval(intervalIdRef.current!) // Stop the interval if already stabilized
+        return
       }
 
-      let allStable = true; // Flag to check if all nodes are stable
+      let allStable = true // Flag to check if all nodes are stable
 
       setContainerData((prevData) => {
-        const updatedData: { [id: string]: ContainerData } = { ...prevData };
+        const updatedData: { [id: string]: ContainerData } = { ...prevData }
 
         Object.values(updatedData).forEach((node) => {
-          let fx = 0;
-          let fy = 0;
+          let fx = 0
+          let fy = 0
 
           // Check node stability
           if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-            allStable = false; // Node is still moving
+            allStable = false // Node is still moving
             // console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
-            stableCountRef.current = 0;
+            stableCountRef.current = 0
           }
 
           // 1. Repulsive Forces between all node pairs
           Object.values(updatedData).forEach((otherNode) => {
-            if (node.id === otherNode.id) return;
+            if (node.id === otherNode.id) return
 
-            const dx = node.x - otherNode.x;
-            const dy = node.y - otherNode.y;
-            let distance = Math.sqrt(dx * dx + dy * dy) || 1;
+            const dx = node.x - otherNode.x
+            const dy = node.y - otherNode.y
+            let distance = Math.sqrt(dx * dx + dy * dy) || 1
 
             // Prevent division by zero and excessive repulsion
-            distance = Math.max(distance, minDistance);
+            distance = Math.max(distance, minDistance)
 
-            const repulsion = mapTypeForces[mapType].repulsion / (distance * distance);
-            fx += (dx / distance) * repulsion;
-            fy += (dy / distance) * repulsion;
-          });
+            const repulsion = mapTypeForces[mapType].repulsion / (distance * distance)
+            fx += (dx / distance) * repulsion
+            fy += (dy / distance) * repulsion
+          })
 
           // 2. Attractive Forces for connected nodes
           edges.forEach((conn) => {
             if (conn.from === node.id) {
-              const targetNode = updatedData[conn.to];
+              const targetNode = updatedData[conn.to]
               if (targetNode) {
-                const dx = targetNode.x - node.x;
-                const dy = targetNode.y - node.y;
-                const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+                const dx = targetNode.x - node.x
+                const dy = targetNode.y - node.y
+                const distance = Math.sqrt(dx * dx + dy * dy) || 1
 
-                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction;
-                fx += (dx / distance) * attraction;
-                fy += (dy / distance) * attraction;
+                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
+                fx += (dx / distance) * attraction
+                fy += (dy / distance) * attraction
               }
             } else if (conn.to === node.id) {
-              const targetNode = updatedData[conn.from];
+              const targetNode = updatedData[conn.from]
               if (targetNode) {
-                const dx = targetNode.x - node.x;
-                const dy = targetNode.y - node.y;
-                const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+                const dx = targetNode.x - node.x
+                const dy = targetNode.y - node.y
+                const distance = Math.sqrt(dx * dx + dy * dy) || 1
 
-                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction;
+                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
 
-                fx += (dx / distance) * attraction;
-                fy += (dy / distance) * attraction;
+                fx += (dx / distance) * attraction
+                fy += (dy / distance) * attraction
               }
             }
-          });
+          })
 
           // 3. Central Gravity Force
-          const dxCenter = centerX - node.x;
-          const dyCenter = centerY - node.y;
-          fx += dxCenter * mapTypeForces[mapType].gravity;
-          fy += dyCenter * mapTypeForces[mapType].gravity;
+          const dxCenter = centerX - node.x
+          const dyCenter = centerY - node.y
+          fx += dxCenter * mapTypeForces[mapType].gravity
+          fy += dyCenter * mapTypeForces[mapType].gravity
 
           // 4. Collision Detection and Resolution
           Object.values(updatedData).forEach((otherNode) => {
-            if (node.id === otherNode.id) return;
+            if (node.id === otherNode.id) return
 
-            const dx = node.x - otherNode.x;
-            const dy = node.y - otherNode.y;
-            const distance = Math.sqrt(dx * dx + dy * dy) || 1;
+            const dx = node.x - otherNode.x
+            const dy = node.y - otherNode.y
+            const distance = Math.sqrt(dx * dx + dy * dy) || 1
 
             if (distance < minDistance) {
-              const overlap = minDistance - distance;
-              const collision = (overlap / distance) * mapTypeForces[mapType].collision;
-              fx += (dx / distance) * collision;
-              fy += (dy / distance) * collision;
+              const overlap = minDistance - distance
+              const collision = (overlap / distance) * mapTypeForces[mapType].collision
+              fx += (dx / distance) * collision
+              fy += (dy / distance) * collision
             }
-          });
+          })
 
           // 5. Update Velocities with Damping
-          node.vx = (node.vx + fx) * mapTypeForces[mapType].damping;
-          node.vy = (node.vy + fy) * mapTypeForces[mapType].damping;
+          node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
+          node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
 
           // 6. Cap Velocities to Prevent Overshooting
-          node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx));
-          node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy));
+          node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
+          node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
 
           // 7. Update Positions
-          node.x += node.vx;
-          node.y += node.vy;
+          node.x += node.vx
+          node.y += node.vy
 
           // 8. Boundary Enforcement: Keep Nodes Within Container
-          node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x));
-          node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y));
-        });
+          node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
+          node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
+        })
 
-        return updatedData;
-      });
+        return updatedData
+      })
       // Update stability state
       if (allStable) {
-        stableCountRef.current += 1;
+        stableCountRef.current += 1
         // console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
         if (stableCountRef.current >= STABLE_ITERATIONS) {
           // console.log('Graph has stabilized.');
-          stabilizedRef.current = true; // Mark the graph as stabilized
-          window.clearInterval(intervalIdRef.current!); // Stop the interval
+          stabilizedRef.current = true // Mark the graph as stabilized
+          window.clearInterval(intervalIdRef.current!) // Stop the interval
         }
       } else {
         if (stableCountRef.current > 0) {
-          console.log('Graph became unstable again. Resetting stable count.');
+          console.log('Graph became unstable again. Resetting stable count.')
         }
-        stableCountRef.current = 0; // Reset stability count if instability is detected
+        stableCountRef.current = 0 // Reset stability count if instability is detected
       }
-    }, 30); // Update every 30ms for smooth animation
+    }, 30) // Update every 30ms for smooth animation
 
-    intervalIdRef.current = interval; // Store the interval ID for cleanup
+    intervalIdRef.current = interval // Store the interval ID for cleanup
 
     return () => {
       if (intervalIdRef.current !== null) {
-        window.clearInterval(intervalIdRef.current); // Ensure interval is cleared on unmount
+        window.clearInterval(intervalIdRef.current) // Ensure interval is cleared on unmount
       }
-    };
-  }, [edges, mapView, mapType, containers, selectedTopic]);
+    }
+  }, [edges, mapView, mapType, containers, selectedTopic])
 
   return (
     <>
       <Head>
         <title>GossipSub Simulator</title>
-        <meta name="description" content="Manage Docker containers" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="icon" href="/favicon.ico" />
+        <meta name='description' content='Manage Docker containers' />
+        <meta name='viewport' content='width=device-width, initial-scale=1' />
+        <link rel='icon' href='/favicon.ico' />
       </Head>
-      <div className="app-container">
+      <div className='app-container'>
         {/* Sidebar 1: Controls */}
-        <div className="sidebar sidebar1">
+        <div className='sidebar sidebar1'>
           <h3>Settings</h3>
-          <div className="input-group">
+          <div className='input-group'>
             <label>
               Container Image Name:
-              <input
-                type="text"
-                value={imageName}
-                onChange={(e) => setImageName(e.target.value)}
-              />
+              <input type='text' value={imageName} onChange={(e) => setImageName(e.target.value)} />
             </label>
           </div>
-          <div className="input-group">
+          <div className='input-group'>
             <label>
               PubSub Topics (comma sep):
-              <input
-                type="text"
-                value={topicsName}
-                onChange={(e) => setTopicsName(e.target.value)}
-              />
+              <input type='text' value={topicsName} onChange={(e) => setTopicsName(e.target.value)} />
             </label>
           </div>
-          <div className="input-group">
+          <div className='input-group'>
             <label>
-              <input
-                type="checkbox"
-                checked={debugContainer}
-                onChange={() => setDebugContainer(!debugContainer)}
-              />
-              <span style={{ marginLeft: '5px' }}>
-                Start with debug
-              </span>
+              <input type='checkbox' checked={debugContainer} onChange={() => setDebugContainer(!debugContainer)} />
+              <span style={{ marginLeft: '5px' }}>Start with debug</span>
             </label>
           </div>
           {debugContainer && (
-            <div className="input-group">
+            <div className='input-group'>
               <label>
                 Debug String:
-                <input
-                  type="text"
-                  value={debugStr}
-                  onChange={(e) => setDebugStr(e.target.value)}
-                />
+                <input type='text' value={debugStr} onChange={(e) => setDebugStr(e.target.value)} />
               </label>
             </div>
           )}
-          <div className="input-group">
+          <div className='input-group'>
             <label>
               <input
-                type="checkbox"
+                type='checkbox'
                 checked={hasLatencySettings}
                 onChange={() => setHasLatencySettings(!hasLatencySettings)}
               />
-              <span style={{ marginLeft: '5px' }}>
-                Start with latency
-              </span>
+              <span style={{ marginLeft: '5px' }}>Start with latency</span>
             </label>
           </div>
           {hasLatencySettings && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Min
-                  <input
-                    value={minLatency}
-                    onChange={(e) => setMinLatency(e.target.value)}
-                    style={{ width: '4em' }}
-                  />
+                  <input value={minLatency} onChange={(e) => setMinLatency(e.target.value)} style={{ width: '4em' }} />
                 </label>
               </div>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Max
-                  <input
-                    value={maxLatency}
-                    onChange={(e) => setMaxLatency(e.target.value)}
-                    style={{ width: '4em' }}
-                  />
+                  <input value={maxLatency} onChange={(e) => setMaxLatency(e.target.value)} style={{ width: '4em' }} />
                 </label>
               </div>
             </div>
           )}
-          <div className="input-group">
+          <div className='input-group'>
             <label>
               <input
-                type="checkbox"
+                type='checkbox'
                 checked={hasPacketLossSetting}
                 onChange={() => setHasPacketLossSettings(!hasPacketLossSetting)}
               />
-              <span style={{ marginLeft: '5px' }}>
-                Start with packet loss
-              </span>
+              <span style={{ marginLeft: '5px' }}>Start with packet loss</span>
             </label>
           </div>
           {hasPacketLossSetting && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Loss %
-                  <input
-                    value={packetLoss}
-                    onChange={(e) => setPacketLoss(e.target.value)}
-                    style={{ width: '4em' }}
-                  />
+                  <input value={packetLoss} onChange={(e) => setPacketLoss(e.target.value)} style={{ width: '4em' }} />
                 </label>
               </div>
             </div>
           )}
-          <div className="input-group">
+          <div className='input-group'>
             <label>
               <input
-                type="checkbox"
+                type='checkbox'
                 checked={hasGossipDSettings}
                 onChange={() => setHasGossipDSettings(!hasGossipDSettings)}
               />
-              <span style={{ marginLeft: '5px' }}>
-                Gossip D Settings (not bootstrappers)
-              </span>
+              <span style={{ marginLeft: '5px' }}>Gossip D Settings (not bootstrappers)</span>
             </label>
           </div>
           {hasGossipDSettings && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   D
-                  <input
-                    value={gossipD}
-                    onChange={(e) => setGossipD(e.target.value)}
-                    style={{ width: '2em' }}
-                  />
+                  <input value={gossipD} onChange={(e) => setGossipD(e.target.value)} style={{ width: '2em' }} />
                 </label>
               </div>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Dlo
-                  <input
-                    value={gossipDlo}
-                    onChange={(e) => setGossipDlo(e.target.value)}
-                    style={{ width: '2em' }}
-                  />
+                  <input value={gossipDlo} onChange={(e) => setGossipDlo(e.target.value)} style={{ width: '2em' }} />
                 </label>
               </div>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Dhi
-                  <input
-                    value={gossipDhi}
-                    onChange={(e) => setGossipDhi(e.target.value)}
-                    style={{ width: '2em' }}
-                  />
+                  <input value={gossipDhi} onChange={(e) => setGossipDhi(e.target.value)} style={{ width: '2em' }} />
                 </label>
               </div>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
                   Dout
-                  <input
-                    value={gossipDout}
-                    onChange={(e) => setGossipDout(e.target.value)}
-                    style={{ width: '2em' }}
-                  />
+                  <input value={gossipDout} onChange={(e) => setGossipDout(e.target.value)} style={{ width: '2em' }} />
                 </label>
               </div>
             </div>
           )}
-          <div className="input-group">
+          <div className='input-group'>
             <label>
-              <input
-                type="checkbox"
-                checked={hasPerfSetting}
-                onChange={() => setHasPerfSetting(!hasPerfSetting)}
-              />
-              <span style={{ marginLeft: '5px' }}>
-                Run Perf on connect
-              </span>
+              <input type='checkbox' checked={hasPerfSetting} onChange={() => setHasPerfSetting(!hasPerfSetting)} />
+              <span style={{ marginLeft: '5px' }}>Run Perf on connect</span>
             </label>
           </div>
           {hasPerfSetting && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-              <div className="input-group">
+              <div className='input-group'>
                 <label>
-                  Bytes: 
-                  <input
-                    value={perfBytes}
-                    onChange={(e) => setPerfBytes(e.target.value)}
-                    style={{ width: '4em' }}
-                  />
+                  Bytes:
+                  <input value={perfBytes} onChange={(e) => setPerfBytes(e.target.value)} style={{ width: '4em' }} />
                 </label>
               </div>
             </div>
           )}
-          <div className="input-group">
+          <div className='input-group'>
             <label>
-              <input
-                type="checkbox"
-                checked={disableNoise}
-                onChange={() => setDisableNoise(!disableNoise)}
-              />
-              <span style={{ marginLeft: '5px' }}>
-                Disable Noise
-              </span>
+              <input type='checkbox' checked={disableNoise} onChange={() => setDisableNoise(!disableNoise)} />
+              <span style={{ marginLeft: '5px' }}>Disable Noise</span>
             </label>
           </div>
 
@@ -1513,14 +1418,20 @@ export default function Home() {
 
           <div style={{ display: 'flex', gap: '0px 10px' }}>
             <button onClick={() => stopXContainers(5)}>Stop 5</button>
-            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>Stop All</button>
+            <button onClick={stopAllContainers} style={{ backgroundColor: '#e62020' }}>
+              Stop All
+            </button>
           </div>
           <h3>Show</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <button onClick={() => setMapType('connections')} className={mapType === 'connections' ? 'selected' : ''}>Connections</button>
-            <button onClick={() => setMapType('meshPeers')} className={mapType === 'meshPeers' ? 'selected' : ''}>Mesh Peers</button>
+            <button onClick={() => setMapType('connections')} className={mapType === 'connections' ? 'selected' : ''}>
+              Connections
+            </button>
+            <button onClick={() => setMapType('meshPeers')} className={mapType === 'meshPeers' ? 'selected' : ''}>
+              Mesh Peers
+            </button>
             {mapType === 'meshPeers' && (
-              <div className="selection-list">
+              <div className='selection-list'>
                 <h3>Mesh Topics</h3>
                 {topics.length > 0 ? (
                   <div>
@@ -1529,7 +1440,7 @@ export default function Home() {
                         <li key={index}>
                           <label>
                             <input
-                              type="checkbox"
+                              type='checkbox'
                               checked={selectedTopic === topic}
                               onChange={() => handleTopicSelect(topic)}
                             />
@@ -1544,9 +1455,11 @@ export default function Home() {
                 )}
               </div>
             )}
-            <button onClick={() => setMapType('subscribers')} className={mapType === 'subscribers' ? 'selected' : ''}>Subscribers</button>
+            <button onClick={() => setMapType('subscribers')} className={mapType === 'subscribers' ? 'selected' : ''}>
+              Subscribers
+            </button>
             {mapType === 'subscribers' && (
-              <div className="selection-list">
+              <div className='selection-list'>
                 <h3>Subscription Topics</h3>
                 {topics.length > 0 ? (
                   <div>
@@ -1555,7 +1468,7 @@ export default function Home() {
                         <li key={index}>
                           <label>
                             <input
-                              type="checkbox"
+                              type='checkbox'
                               checked={selectedTopic === topic}
                               onChange={() => handleTopicSelect(topic)}
                             />
@@ -1570,11 +1483,15 @@ export default function Home() {
                 )}
               </div>
             )}
-            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>Pubsub Peer Store</button>
-            <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>Streams</button>
+            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>
+              Pubsub Peer Store
+            </button>
+            <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>
+              Streams
+            </button>
             {/* Conditionally render protocols when mapType is 'streams' */}
             {mapType === 'streams' && (
-              <div className="selection-list">
+              <div className='selection-list'>
                 <h3>Stream Protocols</h3>
                 {protocols.length > 0 ? (
                   <div>
@@ -1582,9 +1499,7 @@ export default function Home() {
                       <button onClick={() => setSelectedProtocols(protocols)} style={{ marginRight: '10px' }}>
                         Select All
                       </button>
-                      <button onClick={() => setSelectedProtocols([])}>
-                        Clear
-                      </button>
+                      <button onClick={() => setSelectedProtocols([])}>Clear</button>
                     </div>
                     {/* Protocol Checkboxes */}
                     <ul>
@@ -1592,7 +1507,7 @@ export default function Home() {
                         <li key={index}>
                           <label>
                             <input
-                              type="checkbox"
+                              type='checkbox'
                               checked={selectedProtocols.includes(protocol)}
                               onChange={() => handleProtocolSelect(protocol)}
                             />
@@ -1607,26 +1522,48 @@ export default function Home() {
                 )}
               </div>
             )}
-            <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>Libp2p Peer Store</button>
-            <button onClick={() => setMapType('dhtPeers')} className={mapType === 'dhtPeers' ? 'selected' : ''}>DHT Known Peers</button>
+            <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>
+              Libp2p Peer Store
+            </button>
+            <button onClick={() => setMapType('dhtPeers')} className={mapType === 'dhtPeers' ? 'selected' : ''}>
+              DHT Known Peers
+            </button>
           </div>
         </div>
 
         {/* Middle Section: Graph */}
-        <div className="middle">
-          {controllerOffline && (
+        <div className='middle'>
+          {controllerStatus === 'connecting' && (
+            <div
+              style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'green', fontSize: '20px' }}
+            >
+              Connecting to controller...
+            </div>
+          )}
+          {controllerStatus === 'offline' && (
             <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'red', fontSize: '20px' }}>
               Controller offline
             </div>
           )}
-          {!controllerOffline && (<div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
-            <h1>{mapType}</h1>
-            <div>{`Total containers: ${containers.length}`}</div>
-            <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
+          {controllerStatus === 'online' && (
+            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
+              <h1>{mapType}</h1>
+              <div>{`Total containers: ${containers.length}`}</div>
+              <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
-            <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
-          </div>)}
-          <div style={{ position: 'absolute', top: '0px', right: '0px', fontSize: '30px', zIndex: 10, textAlign: 'center' }}>
+              <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
+            </div>
+          )}
+          <div
+            style={{
+              position: 'absolute',
+              top: '0px',
+              right: '0px',
+              fontSize: '30px',
+              zIndex: 10,
+              textAlign: 'center',
+            }}
+          >
             <h6 style={{ marginBottom: '10px' }}>View:</h6>
             {mapView === 'graph' ? (
               <div>
@@ -1648,26 +1585,31 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div className="graph">
+          <div className='graph'>
             {mapView === 'graph' && (
               <div>
-                <svg className="edges">
+                <svg className='edges'>
                   {edges.map((conn, index) => {
-                    const fromNode = containerData[conn.from];
-                    const toNode = containerData[conn.to];
+                    const fromNode = containerData[conn.from]
+                    const toNode = containerData[conn.to]
 
                     if (fromNode && toNode) {
                       // Ensure both nodes have valid positions
-                      if (fromNode.x === undefined || fromNode.y === undefined || toNode.x === undefined || toNode.y === undefined) {
-                        return null;
+                      if (
+                        fromNode.x === undefined ||
+                        fromNode.y === undefined ||
+                        toNode.x === undefined ||
+                        toNode.y === undefined
+                      ) {
+                        return null
                       }
 
                       // Determine the protocol associated with this connection
-                      let connectionProtocol: string | null = null;
+                      let connectionProtocol: string | null = null
 
                       if (mapType === 'streams') {
-                        const toPeerId = containerData[conn.to]?.peerId;
-                        const fromStreams = containerData[conn.from]?.streams[toPeerId];
+                        const toPeerId = containerData[conn.to]?.peerId
+                        const fromStreams = containerData[conn.from]?.streams[toPeerId]
 
                         if (
                           toPeerId &&
@@ -1676,11 +1618,11 @@ export default function Home() {
                           typeof fromStreams[0].protocol === 'string' &&
                           fromStreams[0].protocol.trim() !== ''
                         ) {
-                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
+                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase()
                         } else {
                           // Try the reverse: from to to from
-                          const fromPeerId = containerData[conn.from]?.peerId;
-                          const toStreams = containerData[conn.to]?.streams[fromPeerId];
+                          const fromPeerId = containerData[conn.from]?.peerId
+                          const toStreams = containerData[conn.to]?.streams[fromPeerId]
 
                           if (
                             fromPeerId &&
@@ -1689,7 +1631,7 @@ export default function Home() {
                             typeof toStreams[0].protocol === 'string' &&
                             toStreams[0].protocol.trim() !== ''
                           ) {
-                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase()
                           }
                         }
                       }
@@ -1697,14 +1639,14 @@ export default function Home() {
                       // If protocols are selected, filter edges
                       if (selectedProtocols.length > 0 && mapType === 'streams') {
                         if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
-                          return null; // Do not render this connection
+                          return null // Do not render this connection
                         }
                       }
 
                       // Determine the stroke color based on the protocol
-                      let strokeColor = '#ffffff'; // Default color
-                      let strokeWidth = 2; // Default strokeWidth
-                      let opacity = 0.8; // Default opacity
+                      let strokeColor = '#ffffff' // Default color
+                      let strokeWidth = 2 // Default strokeWidth
+                      let opacity = 0.8 // Default opacity
 
                       if (connectionProtocol) {
                         // Define a color mapping based on protocol
@@ -1713,16 +1655,16 @@ export default function Home() {
                           '/ipfs/id/1.0.0': '#00ff00',
                           '/ipfs/ping/1.0.0': '#000ff0',
                           // Add more protocols and their corresponding colors here
-                        };
-                        strokeColor = protocolColorMap[connectionProtocol] || '#000000';
+                        }
+                        strokeColor = protocolColorMap[connectionProtocol] || '#000000'
                       } else {
                         // For connections without a protocol, use default coloring
-                        strokeColor = `#${conn.from.substring(0, 6)}`;
+                        strokeColor = `#${conn.from.substring(0, 6)}`
                       }
                       if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
-                        strokeColor = '#ffffff';
-                        strokeWidth = 4;
-                        opacity = 1;
+                        strokeColor = '#ffffff'
+                        strokeWidth = 4
+                        opacity = 1
                       }
 
                       return (
@@ -1736,21 +1678,23 @@ export default function Home() {
                           strokeWidth={strokeWidth}
                           opacity={opacity}
                         />
-                      );
+                      )
                     }
-                    return null;
+                    return null
                   })}
                 </svg>
 
                 {containers.map((container) => {
-                  const node = containerData[container.id];
-                  if (!node) return null; // Ensure node data exists
+                  const node = containerData[container.id]
+                  if (!node) return null // Ensure node data exists
 
                   return (
                     <div
                       key={container.id}
-                      ref={(el) => { containerRefs.current[container.id] = el; }}
-                      className="container"
+                      ref={(el) => {
+                        containerRefs.current[container.id] = el
+                      }}
+                      className='container'
                       onClick={() => handleContainerClick(container.id)}
                       onMouseEnter={() => setHoveredContainerId(container.id)}
                       onMouseLeave={() => setHoveredContainerId(null)}
@@ -1773,36 +1717,36 @@ export default function Home() {
                     >
                       {getLabel(container.id)}
                     </div>
-                  );
+                  )
                 })}
               </div>
             )}
 
             {mapView === 'circle' && (
               <div>
-                <svg className="edges">
+                <svg className='edges'>
                   {edges.map((conn, index) => {
-                    const fromEl = containerRefs.current[conn.from];
-                    const toEl = containerRefs.current[conn.to];
+                    const fromEl = containerRefs.current[conn.from]
+                    const toEl = containerRefs.current[conn.to]
 
                     if (fromEl && toEl) {
-                      const fromRect = fromEl.getBoundingClientRect();
-                      const toRect = toEl.getBoundingClientRect();
+                      const fromRect = fromEl.getBoundingClientRect()
+                      const toRect = toEl.getBoundingClientRect()
 
-                      const svgRect = fromEl.parentElement!.getBoundingClientRect();
+                      const svgRect = fromEl.parentElement!.getBoundingClientRect()
 
-                      const x1 = fromRect.left + fromRect.width / 2 - svgRect.left;
-                      const y1 = fromRect.top + fromRect.height / 2 - svgRect.top;
+                      const x1 = fromRect.left + fromRect.width / 2 - svgRect.left
+                      const y1 = fromRect.top + fromRect.height / 2 - svgRect.top
 
-                      const x2 = toRect.left + toRect.width / 2 - svgRect.left;
-                      const y2 = toRect.top + toRect.height / 2 - svgRect.top;
+                      const x2 = toRect.left + toRect.width / 2 - svgRect.left
+                      const y2 = toRect.top + toRect.height / 2 - svgRect.top
 
                       // Determine the protocol associated with this connection
-                      let connectionProtocol: string | null = null;
+                      let connectionProtocol: string | null = null
 
                       if (mapType === 'streams') {
-                        const toPeerId = containerData[conn.to]?.peerId;
-                        const fromStreams = containerData[conn.from]?.streams[toPeerId];
+                        const toPeerId = containerData[conn.to]?.peerId
+                        const fromStreams = containerData[conn.from]?.streams[toPeerId]
 
                         if (
                           toPeerId &&
@@ -1811,11 +1755,11 @@ export default function Home() {
                           typeof fromStreams[0].protocol === 'string' &&
                           fromStreams[0].protocol.trim() !== ''
                         ) {
-                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase();
+                          connectionProtocol = fromStreams[0].protocol.trim().toLowerCase()
                         } else {
                           // Try the reverse: from to to from
-                          const fromPeerId = containerData[conn.from]?.peerId;
-                          const toStreams = containerData[conn.to]?.streams[fromPeerId];
+                          const fromPeerId = containerData[conn.from]?.peerId
+                          const toStreams = containerData[conn.to]?.streams[fromPeerId]
 
                           if (
                             fromPeerId &&
@@ -1824,7 +1768,7 @@ export default function Home() {
                             typeof toStreams[0].protocol === 'string' &&
                             toStreams[0].protocol.trim() !== ''
                           ) {
-                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase();
+                            connectionProtocol = toStreams[0].protocol.trim().toLowerCase()
                           }
                         }
                       }
@@ -1832,61 +1776,53 @@ export default function Home() {
                       // If protocols are selected, filter connections
                       if (selectedProtocols.length > 0 && mapType === 'streams') {
                         if (!connectionProtocol || !selectedProtocols.includes(connectionProtocol)) {
-                          return null; // Do not render this connection
+                          return null // Do not render this connection
                         }
                       }
 
-                      let strokeColor = '#ffffff'; // Default color
+                      let strokeColor = '#ffffff' // Default color
 
                       if (connectionProtocol) {
                         const protocolColorMap: { [key: string]: string } = {
                           '/meshsub/1.2.0': '#0fff00',
                           '/ipfs/id/1.0.0': '#00ff00',
                           '/ipfs/ping/1.0.0': '#000ff0',
-                        };
-                        strokeColor = protocolColorMap[connectionProtocol] || '#000000';
+                        }
+                        strokeColor = protocolColorMap[connectionProtocol] || '#000000'
                       } else {
-                        strokeColor = `#${conn.from.substring(0, 6)}`;
+                        strokeColor = `#${conn.from.substring(0, 6)}`
                       }
                       if (hoveredContainerId === conn.from || hoveredContainerId === conn.to) {
-                        strokeColor = '#ffffff';
+                        strokeColor = '#ffffff'
                       }
 
-                      return (
-                        <line
-                          key={index}
-                          x1={x1}
-                          y1={y1}
-                          x2={x2}
-                          y2={y2}
-                          stroke={strokeColor}
-                          strokeWidth="2"
-                        />
-                      );
+                      return <line key={index} x1={x1} y1={y1} x2={x2} y2={y2} stroke={strokeColor} strokeWidth='2' />
                     }
-                    return null;
+                    return null
                   })}
                 </svg>
 
                 {containers.map((container, index) => {
-                  const numContainers = containers.length;
+                  const numContainers = containers.length
 
                   // Arrange containers in a single circle
-                  const angle = (index / numContainers) * 360;
-                  const radius = 320; // Fixed radius
+                  const angle = (index / numContainers) * 360
+                  const radius = 320 // Fixed radius
 
                   // Adjust item size based on number of containers
-                  const minItemSize = 20;
-                  const maxItemSize = 80;
-                  const itemSize = Math.max(minItemSize, maxItemSize - numContainers);
+                  const minItemSize = 20
+                  const maxItemSize = 80
+                  const itemSize = Math.max(minItemSize, maxItemSize - numContainers)
 
-                  const fontSize = itemSize / 4; // Adjust font size proportionally
+                  const fontSize = itemSize / 4 // Adjust font size proportionally
 
                   return (
                     <div
                       key={container.id}
-                      ref={(el) => { containerRefs.current[container.id] = el; }}
-                      className="container"
+                      ref={(el) => {
+                        containerRefs.current[container.id] = el
+                      }}
+                      className='container'
                       onClick={() => handleContainerClick(container.id)}
                       onMouseEnter={() => setHoveredContainerId(container.id)}
                       onMouseLeave={() => setHoveredContainerId(null)}
@@ -1908,7 +1844,7 @@ export default function Home() {
                     >
                       {getLabel(container.id)}
                     </div>
-                  );
+                  )
                 })}
               </div>
             )}
@@ -1916,23 +1852,24 @@ export default function Home() {
         </div>
 
         {/* Sidebar 2: Information and Actions */}
-        <div className="sidebar sidebar2">
+        <div className='sidebar sidebar2'>
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
           <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
           <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
           {autoPublish && (
-            <div className="input-group">
+            <div className='input-group'>
               <label>
                 Interval
                 <input
                   value={autoPublishInterval}
                   onChange={(e) => setAutoPublishInterval(e.target.value)}
                   style={{ width: '5em' }}
-                /> ms
+                />{' '}
+                ms
               </label>
-              <div className="selection-list">
+              <div className='selection-list'>
                 {topics.length > 0 ? (
                   <div>
                     <ul>
@@ -1940,7 +1877,7 @@ export default function Home() {
                         <li key={index}>
                           <label>
                             <input
-                              type="checkbox"
+                              type='checkbox'
                               checked={selectedTopic === topic}
                               onChange={() => handleTopicSelect(topic)}
                             />
@@ -1966,35 +1903,37 @@ export default function Home() {
                 <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
                 <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
                 <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
-                <div className="input-group">
+                <div className='input-group'>
                   <label>
                     Connect to multiaddr:
-                    <input
-                      type="text"
-                      value={connectMultiaddr}
-                      onChange={(e) => setConnectMultiaddr(e.target.value)}
-                    />
+                    <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
                   </label>
                 </div>
                 <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
-                <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>Stop</button>
+                <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
+                  Stop
+                </button>
                 <button onClick={() => getLogs(selectedContainer)}>Logs</button>
-                {!containerData[selectedContainer].tcpdumping && <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>}
-                {containerData[selectedContainer].tcpdumping && <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>}
+                {!containerData[selectedContainer].tcpdumping && (
+                  <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
+                )}
+                {containerData[selectedContainer].tcpdumping && (
+                  <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
+                )}
               </div>
               <div>Container ID: {selectedContainer}</div>
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
-              <div>Connect+perf:  {Math.round(containerData[selectedContainer]?.connectTime)}ms</div>
+              <div>Connect+perf: {Math.round(containerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
                 <div>
-                    {Object.entries(containerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
-                      <div key={topic} style={{ marginLeft: '1rem'}}>
-                        {topic}: {Array.isArray(peers) ? peers.length : 0} peers
-                      </div>
-                    ))}
+                  {Object.entries(containerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
+                    <div key={topic} style={{ marginLeft: '1rem' }}>
+                      {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div>No mesh peers available for topics.</div>
@@ -2004,214 +1943,234 @@ export default function Home() {
               <div>Subscribers</div>
               {Object.keys(containerData[selectedContainer]?.subscribersList || {}).length > 0 ? (
                 <div>
-                    {Object.entries(containerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
-                      <div key={topic} style={{ marginLeft: '1rem'}}>
-                        {topic}: {Array.isArray(peers) ? peers.length : 0} peers
-                      </div>
-                    ))}
+                  {Object.entries(containerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
+                    <div key={topic} style={{ marginLeft: '1rem' }}>
+                      {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <div>No mesh peers available for topics.</div>
               )}
-              <div>Topics: {containerData[selectedContainer]?.topics?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
+              <div>
+                Topics:{' '}
+                {containerData[selectedContainer]?.topics?.map((p, index) => (
+                  <p key={index} style={{ marginLeft: '1rem' }}>
+                    {p}
+                  </p>
+                ))}
+              </div>
               <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
               <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
-              <div>Protocols: {containerData[selectedContainer]?.protocols?.map((p, index) => <p key={index} style={{ marginLeft: '1rem' }}>{p}</p>)}</div>
-              <div>Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}</div>
+              <div>
+                Protocols:{' '}
+                {containerData[selectedContainer]?.protocols?.map((p, index) => (
+                  <p key={index} style={{ marginLeft: '1rem' }}>
+                    {p}
+                  </p>
+                ))}
+              </div>
+              <div>
+                Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+              </div>
             </div>
           )}
         </div>
 
         <style jsx>{`
-        .app-container {
-          display: flex;
-          min-height: 100vh;
-        }
+          .app-container {
+            display: flex;
+            min-height: 100vh;
+          }
 
-        .sidebar {
-          width: 250px;
-          padding: 10px 15px 0px;
-          background-color: #111111;
-          color: white;
-          overflow-y: auto;
-          max-height: 100vh;
-        }
+          .sidebar {
+            width: 250px;
+            padding: 10px 15px 0px;
+            background-color: #111111;
+            color: white;
+            overflow-y: auto;
+            max-height: 100vh;
+          }
 
-        .sidebar h1 {
-          text-align: center;
-          margin-bottom: 30px;
-        }
+          .sidebar h1 {
+            text-align: center;
+            margin-bottom: 30px;
+          }
 
-        .input-group {
-          margin-bottom: 10px;
-          user-select: none;
-        }
+          .input-group {
+            margin-bottom: 10px;
+            user-select: none;
+          }
 
-        .input-group label {
-          flex-direction: column;
-          font-size: 16px;
-        }
+          .input-group label {
+            flex-direction: column;
+            font-size: 16px;
+          }
 
-        .input-group input {
-          padding: 5px;
-          font-size: 16px;
-        }
+          .input-group input {
+            padding: 5px;
+            font-size: 16px;
+          }
 
-        p {
-          word-wrap: break-word;
-        }
+          p {
+            word-wrap: break-word;
+          }
 
-        .sidebar1 p {
-          font-size: 18px;
-          margin-bottom: 20px;
-          text-align: center;
-        }
+          .sidebar1 p {
+            font-size: 18px;
+            margin-bottom: 20px;
+            text-align: center;
+          }
 
-        .sidebar button {
-          display: block;
-          margin-bottom: 10px;
-          padding: 10px;
-          font-size: 16px;
-          cursor: pointer;
-          width: 100%;
-          border: none;
-          border-radius: 4px;
-          background-color: #0070f3;
-          color: white;
-        }
+          .sidebar button {
+            display: block;
+            margin-bottom: 10px;
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            border: none;
+            border-radius: 4px;
+            background-color: #0070f3;
+            color: white;
+          }
 
-        .sidebar button.short {
-          width: inherit;
-        }
+          .sidebar button.short {
+            width: inherit;
+          }
 
-        .sidebar button:hover {
-          background-color: #005bb5;
-        }
+          .sidebar button:hover {
+            background-color: #005bb5;
+          }
 
-        .sidebar button.selected {
-          background-color: #005bb5;
-        }
+          .sidebar button.selected {
+            background-color: #005bb5;
+          }
 
-        .middle {
-          flex-grow: 1;
-          display: flex;
-          justify-content: center;
-          align-items: center;
-          position: relative;
-        }
+          .middle {
+            flex-grow: 1;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+          }
 
-        .graph {
-          position: relative;
-          width: ${CONTAINER_WIDTH}px;
-          height: ${CONTAINER_HEIGHT}px;
-          margin: 0 auto;
-          overflow: hidden;
-          user-select: none;
-        }
+          .graph {
+            position: relative;
+            width: ${CONTAINER_WIDTH}px;
+            height: ${CONTAINER_HEIGHT}px;
+            margin: 0 auto;
+            overflow: hidden;
+            user-select: none;
+          }
 
-        .edges {
-          position: absolute;
-          width: 100%;
-          height: 100%;
-          top: 0;
-          left: 0;
-          pointer-events: none; /* Allow clicks to pass through */
-        }
+          .edges {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            pointer-events: none; /* Allow clicks to pass through */
+          }
 
-        .container {
-          position: absolute;
-          background-color: #0070f3;
-          color: white;
-          border-radius: 50%;
-          text-align: center;
-          cursor: pointer;
-          transform-origin: 50% 50%;
-          transition: left 0.1s, top 0.1s, background-color 0.2s, border 0.1s;
-          overflow: hidden;
-          white-space: nowrap;
-          text-overflow: ellipsis;
-        }
+          .container {
+            position: absolute;
+            background-color: #0070f3;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            cursor: pointer;
+            transform-origin: 50% 50%;
+            transition:
+              left 0.1s,
+              top 0.1s,
+              background-color 0.2s,
+              border 0.1s;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+          }
 
-        .selection-list {
-          width: 100%;
-        }
+          .selection-list {
+            width: 100%;
+          }
 
-        .selection-list button {
-          padding: 5px 10px;
-          font-size: 14px;
-          cursor: pointer;
-          border: none;
-          border-radius: 4px;
-          background-color: #0070f3;
-          color: white;
-        }
+          .selection-list button {
+            padding: 5px 10px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background-color: #0070f3;
+            color: white;
+          }
 
-        .selection-list button:hover {
-          background-color: #005bb5;
-        }
+          .selection-list button:hover {
+            background-color: #005bb5;
+          }
 
-        .selection-list ul {
-          list-style-type: none;
-          padding-left: 0;
-          max-height: 200px;
-          overflow-y: auto;
-        }
+          .selection-list ul {
+            list-style-type: none;
+            padding-left: 0;
+            max-height: 200px;
+            overflow-y: auto;
+          }
 
-        .selection-list li {
-          margin-bottom: 5px;
-        }
+          .selection-list li {
+            margin-bottom: 5px;
+          }
 
-        .selection-list label {
-          cursor: pointer;
-        }
+          .selection-list label {
+            cursor: pointer;
+          }
 
-        /* Sidebar 2 Styles */
-        .sidebar2 {
-          width: 250px;
-          padding: 15px;
-          background-color: #222222;
-          color: white;
-        }
+          /* Sidebar 2 Styles */
+          .sidebar2 {
+            width: 250px;
+            padding: 15px;
+            background-color: #222222;
+            color: white;
+          }
 
-        .sidebar2 button {
-          display: block;
-          margin-bottom: 10px;
-          padding: 10px;
-          font-size: 16px;
-          cursor: pointer;
-          width: 100%;
-          border: none;
-          border-radius: 4px;
-          background-color: #0070f3;
-          color: white;
-        }
+          .sidebar2 button {
+            display: block;
+            margin-bottom: 10px;
+            padding: 10px;
+            font-size: 16px;
+            cursor: pointer;
+            width: 100%;
+            border: none;
+            border-radius: 4px;
+            background-color: #0070f3;
+            color: white;
+          }
 
-        .sidebar2 button:hover {
-          background-color: #005bb5;
-        }
+          .sidebar2 button:hover {
+            background-color: #005bb5;
+          }
 
-        .sidebar2 h3 {
-          margin-top: 20px;
-        }
+          .sidebar2 h3 {
+            margin-top: 20px;
+          }
 
-        /* Scrollbar Styles */
-        .sidebar::-webkit-scrollbar,
-        .sidebar2::-webkit-scrollbar {
-          width: 8px;
-        }
+          /* Scrollbar Styles */
+          .sidebar::-webkit-scrollbar,
+          .sidebar2::-webkit-scrollbar {
+            width: 8px;
+          }
 
-        .sidebar::-webkit-scrollbar-track,
-        .sidebar2::-webkit-scrollbar-track {
-          background: #333333;
-        }
+          .sidebar::-webkit-scrollbar-track,
+          .sidebar2::-webkit-scrollbar-track {
+            background: #333333;
+          }
 
-        .sidebar::-webkit-scrollbar-thumb,
-        .sidebar2::-webkit-scrollbar-thumb {
-          background-color: #555555;
-          border-radius: 4px;
-        }
-      `}</style>
-      </div >
+          .sidebar::-webkit-scrollbar-thumb,
+          .sidebar2::-webkit-scrollbar-thumb {
+            background-color: #555555;
+            border-radius: 4px;
+          }
+        `}</style>
+      </div>
     </>
-  );
+  )
 }
