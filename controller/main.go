@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,11 +34,11 @@ import (
 )
 
 var (
-	DockerClient           *client.Client
-	startedContainers      []string
-	startedContainersMutex sync.Mutex
-	logStreamers           = make(map[string]*ContainerLogStreamer)
-	logStreamersMutex      sync.Mutex
+	DockerClient        *client.Client
+	runningContainers   []string
+	runningContainersMu sync.Mutex
+	logStreamers        = make(map[string]*ContainerLogStreamer)
+	logStreamersMu      sync.Mutex
 
 	// Map to track container WebSocket connections
 	containerConns   = make(map[string]*websocket.Conn)
@@ -164,9 +165,9 @@ func startContainer(containerID string) error {
 		return fmt.Errorf("failed to start container %s: %w", containerID, err)
 	}
 
-	startedContainersMutex.Lock()
-	startedContainers = append(startedContainers, containerID)
-	startedContainersMutex.Unlock()
+	runningContainersMu.Lock()
+	runningContainers = append(runningContainers, containerID)
+	runningContainersMu.Unlock()
 
 	// Broadcast after start
 	go broadcastContainers()
@@ -260,10 +261,8 @@ func imageExists(cli *client.Client, ctx context.Context, imageName string) (boo
 	}
 
 	for _, img := range images {
-		for _, tag := range img.RepoTags {
-			if tag == imageName {
-				return true, nil
-			}
+		if slices.Contains(img.RepoTags, imageName) {
+			return true, nil
 		}
 	}
 
@@ -535,19 +534,26 @@ func setContainerConn(containerID string, conn *websocket.Conn) {
 	containerConns[containerID] = conn
 }
 
-func removeContainerConn(containerID string) {
-	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
-	delete(containerConns, containerID)
-}
-
 func closeContainerConn(containerID string) {
 	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
 	if conn, ok := containerConns[containerID]; ok {
 		conn.Close()
 		delete(containerConns, containerID)
 	}
+	containerConnsMu.Unlock()
+
+	runningContainersMu.Lock()
+	runningContainers = removeValue(runningContainers, containerID)
+	runningContainersMu.Unlock()
+}
+
+func removeValue(s []string, val string) []string {
+	for i, v := range s {
+		if v == val {
+			return slices.Delete(s, i, i+1)
+		}
+	}
+	return s
 }
 
 func startLogStreaming(containerID string) {
@@ -558,9 +564,9 @@ func startLogStreaming(containerID string) {
 		stopChan:    make(chan struct{}),
 	}
 
-	logStreamersMutex.Lock()
+	logStreamersMu.Lock()
 	logStreamers[containerID] = streamer
-	logStreamersMutex.Unlock()
+	logStreamersMu.Unlock()
 
 	options := container.LogsOptions{
 		ShowStdout: true,
@@ -592,8 +598,8 @@ func startLogStreaming(containerID string) {
 }
 
 func stopLogStreaming(containerID string) {
-	logStreamersMutex.Lock()
-	defer logStreamersMutex.Unlock()
+	logStreamersMu.Lock()
+	defer logStreamersMu.Unlock()
 
 	if streamer, exists := logStreamers[containerID]; exists {
 		close(streamer.stopChan)
@@ -1281,17 +1287,19 @@ func enableCors(next http.Handler) http.Handler {
 func cleanup() {
 	fmt.Println("Cleaning up started containers...")
 
-	logStreamersMutex.Lock()
-	for containerID, streamer := range logStreamers {
-		close(streamer.stopChan)
-		delete(logStreamers, containerID)
+	logStreamersMu.Lock()
+	{
+		for containerID, streamer := range logStreamers {
+			close(streamer.stopChan)
+			delete(logStreamers, containerID)
+		}
 	}
-	logStreamersMutex.Unlock()
+	logStreamersMu.Unlock()
 
-	startedContainersMutex.Lock()
-	defer startedContainersMutex.Unlock()
+	runningContainersMu.Lock()
+	defer runningContainersMu.Unlock()
 
-	for _, containerID := range startedContainers {
+	for _, containerID := range runningContainers {
 		fmt.Printf("Attempting to stop and remove container %s...\n", containerID)
 		timeout := 0
 		if err := DockerClient.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
@@ -1302,7 +1310,7 @@ func cleanup() {
 		}
 		closeContainerConn(containerID) // Ensure connections are closed
 	}
-	startedContainers = nil
+	runningContainers = nil
 }
 
 func repopulateState() {
@@ -1317,12 +1325,12 @@ func repopulateState() {
 		log.Fatalf("Failed to list running containers: %v", err)
 	}
 
-	startedContainersMutex.Lock()
-	defer startedContainersMutex.Unlock()
+	runningContainersMu.Lock()
+	defer runningContainersMu.Unlock()
 
 	for _, c := range containers {
 		containerID := c.ID[:12]
-		startedContainers = append(startedContainers, containerID)
+		runningContainers = append(runningContainers, containerID)
 
 		// Attempt to reconnect WebSocket for the container
 		hostPort := 0
@@ -1347,7 +1355,7 @@ func repopulateState() {
 		}
 	}
 
-	log.Printf("Repopulated state: %d containers", len(startedContainers))
+	log.Printf("Repopulated state: %d containers", len(runningContainers))
 }
 
 func main() {
