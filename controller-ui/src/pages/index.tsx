@@ -48,7 +48,8 @@ interface ContainerData {
   meshPeersList: Record<string, string[]>
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[]
-  connections: string[] // IDs of connected containers
+  connections: string[] // peer ids of connections
+  connectionsMA: string[] // mulitaddr of connections
   protocols: string[]
   multiaddrs: string[]
   streams: StreamsByPeer
@@ -87,15 +88,12 @@ const DEFAULT_FORCES = {
   gravity: 0.05, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 80, // Maximum velocity cap
-  naturalLength: 60, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
   pubsubPeers: DEFAULT_FORCES,
-  libp2pPeers: {
-    ...DEFAULT_FORCES,
-    naturalLength: 250,
-  },
+  libp2pPeers: DEFAULT_FORCES,
   meshPeers: DEFAULT_FORCES,
   dhtPeers: DEFAULT_FORCES,
   subscribers: DEFAULT_FORCES,
@@ -104,11 +102,10 @@ const mapTypeForces = {
 }
 
 export default function Home() {
-  // peer stuff
+  // containers & peer stuff
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [imageName, setImageName] = useState<string>('gossip:dev')
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({})
-  const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
   // ui config
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null)
@@ -122,7 +119,7 @@ export default function Home() {
   const [selectedTopic, setSelectedTopics] = useState<string>('')
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
-  const [controllerStatus, setControllerStatus] = useState<ControllerStatus>('connecting')
+  const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
   // network config
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev')
@@ -157,6 +154,7 @@ export default function Home() {
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeout = useRef<number | null>(null)
+  const [controllerStatus, setControllerStatus] = useState<ControllerStatus>('connecting')
 
   const initializeContainerData = (runningContainers: ContainerInfo[]) => {
     setContainerData((prevData) => {
@@ -180,7 +178,8 @@ export default function Home() {
             meshPeersList: {},
             fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
-            connections: [], // Will be updated via WebSocket
+            connections: [],
+            connectionsMA: [],
             protocols: [],
             multiaddrs: [],
             streams: {},
@@ -231,7 +230,7 @@ export default function Home() {
     }
   }
 
-  const envSetter = (env: string[], isBootstrap: boolean = false): string[] => {
+  const envSetter = (env: string[] = [], isBootstrap: boolean = false): string[] => {
     env.push(`TOPICS=${topicsName}`)
 
     if (debugContainer) {
@@ -309,7 +308,7 @@ export default function Home() {
 
   // Function to start a new container
   const handleStartContainer = async () => {
-    const env = envSetter([])
+    const env = envSetter()
 
     await startContainer(imageName, env)
   }
@@ -318,7 +317,7 @@ export default function Home() {
     try {
       const promises = []
       for (let i = 0; i < amount; i++) {
-        const env = envSetter([])
+        const env = envSetter()
 
         promises.push(startContainer(imageName, env))
       }
@@ -1890,6 +1889,13 @@ export default function Home() {
               <p>Type: {containerData[selectedContainer]?.type}</p>
               <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
               <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
+              <div>
+                {containerData[selectedContainer]?.connectionsMA.map((ma) => (
+                  <div key={ma} style={{ marginLeft: '1rem' }}>
+                    {ma}
+                  </div>
+                ))}
+              </div>
               <div>Connect+perf: {Math.round(containerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (

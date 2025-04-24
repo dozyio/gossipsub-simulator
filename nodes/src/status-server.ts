@@ -43,7 +43,8 @@ export interface Update {
   meshPeersList?: TopicsPeers
   fanoutList?: TopicsPeers
   libp2pPeers?: string[]
-  connections?: string[]
+  connections?: string[] // peer ids
+  connectionsMA?: string[] // multiaddrs
   protocols?: string[]
   streams?: Streams
   multiaddrs?: string[]
@@ -69,6 +70,7 @@ export class StatusServer {
   private lastType: string = ''
   private lastLibp2pPeers: string[] = []
   private lastConnections: string[] = []
+  private lastConnectionsMA: string[] = []
   private lastProtocols: string[] = []
   private lastStreams: Streams = {}
   private lastMultiaddrs: string[] = []
@@ -134,9 +136,11 @@ export class StatusServer {
   private handleConnectionEvent = async (evt: CustomEvent) => {
     const connectionList = this.server.getConnections()
     const connections = connectionList.map((connection) => connection.remotePeer.toString())
+    const connectionsMA = connectionList.map((connection) => connection.remoteAddr.toString())
 
     const update: Update = {
       connections,
+      connectionsMA,
     }
     await this.sendUpdate(update)
   }
@@ -512,6 +516,10 @@ export class StatusServer {
     this.lastConnections = connections
     update.connections = connections
 
+    const connectionsMA = connectionList.map((connection) => connection.remoteAddr.toString())
+    this.lastConnectionsMA = connectionsMA
+    update.connectionsMA = connectionsMA
+
     const streams = this.getStreams()
     this.lastStreams = streams
     update.streams = streams
@@ -577,6 +585,7 @@ export class StatusServer {
       update.meshPeersList ||
       update.libp2pPeers ||
       update.connections ||
+      update.connectionsMA ||
       update.protocols ||
       update.streams ||
       update.multiaddrs ||
