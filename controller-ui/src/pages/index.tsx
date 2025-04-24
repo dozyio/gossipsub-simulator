@@ -19,6 +19,15 @@ interface ContainerInfo {
   ports: PortMapping[]
 }
 
+interface RemotePeerInfo {
+  peerId: string
+  mulitaddr: string
+  x: number
+  y: number
+  vx: number // Velocity X
+  vy: number // Velocity Y
+}
+
 interface Stream {
   protocol: string
   direction: 'inbound' | 'outbound'
@@ -106,6 +115,7 @@ export default function Home() {
   const [containers, setContainers] = useState<ContainerInfo[]>([])
   const [imageName, setImageName] = useState<string>('gossip:dev')
   const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({})
+  const [remotePeers, setRemotePeers] = useState<RemotePeerInfo[]>([])
 
   // ui config
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null)
@@ -143,6 +153,7 @@ export default function Home() {
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
   const prevEdgesRef = useRef(edges) // Store previous connections for comparison
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
+  const remotePeerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const [mapType, setMapType] = useState<MapType>('connections')
   const [mapView, setMapView] = useState<MapView>('graph')
   const stableCountRef = useRef(0) // Track stable state count
@@ -866,7 +877,105 @@ export default function Home() {
         return updatedTopics
       })
     }
+
+    if (data.connectionsMA) {
+      console.log(data.connectionsMA)
+
+      const containerPeerIds = Object.values(containerData).map((n) => n.peerId)
+
+      const newRemotePeers: RemotePeerInfo[] = data.connectionsMA.reduce<RemotePeerInfo[]>((acc, ma) => {
+        const match = ma.match(/\/p2p\/([^\/]+)/)
+        if (match) {
+          const peerId = match[1]
+          if (!containerPeerIds.includes(peerId)) {
+            // Add remote peer
+            const { x, y } = getRandomPosition()
+            acc.push({ peerId, mulitaddr: ma, x, y, vx: 0, vy: 0 })
+          }
+        }
+        return acc
+      }, [])
+
+      setRemotePeers((prev) => {
+        const merged = [...prev]
+        newRemotePeers.forEach((peer) => {
+          if (!merged.some((p) => p.peerId === peer.peerId)) {
+            merged.push(peer)
+          }
+        })
+        return merged
+      })
+
+      // setRemotePeers((prev) => {
+      //   // 1. Start by merging in additions
+      //   const merged = [...prev]
+      //   newRemotePeers.forEach((peer) => {
+      //     if (!merged.some((p) => p.peerId === peer.peerId)) {
+      //       merged.push(peer)
+      //     }
+      //   })
+      //
+      //   // 2. Now compute the set of *currently* seen remote peer IDs
+      //   const allRemoteIds = new Set<string>()
+      //   Object.values(containerData).forEach((node) => {
+      //     node.connectionsMA.forEach((ma) => {
+      //       const m = ma.match(/\/p2p\/([^\/]+)/)
+      //       if (m) {
+      //         const id = m[1]
+      //         // only keep non-container IDs
+      //         if (!Object.values(containerData).some((n) => n.peerId === id)) {
+      //           allRemoteIds.add(id)
+      //         }
+      //       }
+      //     })
+      //   })
+      //
+      //   // 3. Filter out any that have disappeared
+      //   return merged.filter((p) => allRemoteIds.has(p.peerId))
+      // })
+    }
   }
+
+  // useEffect(() => {
+  //   // 1. Gather the peerIds for all running containers
+  //   const containerPeerIds = new Set(Object.values(containerData).map((n) => n.peerId))
+  //
+  //   // 2. Scan every multiaddr on every container and collect the remote peers we still see
+  //   const seenRemote = new Map<string, string>() // peerId -> multiaddr
+  //   Object.values(containerData).forEach((node) => {
+  //     node.connectionsMA.forEach((ma) => {
+  //       const m = ma.match(/\/p2p\/([^/]+)/)
+  //       if (m) {
+  //         const id = m[1]
+  //         if (!containerPeerIds.has(id)) {
+  //           // first time we see this peerId (or overwrite to keep latest ma)
+  //           seenRemote.set(id, ma)
+  //         }
+  //       }
+  //     })
+  //   })
+  //
+  //   // 3. Reconcile with our previous remotePeers state
+  //   setRemotePeers((prev) => {
+  //     const next: RemotePeerInfo[] = []
+  //
+  //     // a) keep any old peer that’s still in seenRemote (retain x/y if you like)
+  //     prev.forEach((p) => {
+  //       if (seenRemote.has(p.peerId)) {
+  //         next.push(p)
+  //         seenRemote.delete(p.peerId)
+  //       }
+  //     })
+  //
+  //     // b) whatever remains in seenRemote is brand new — give them a random pos
+  //     seenRemote.forEach((ma, peerId) => {
+  //       const { x, y } = getRandomPosition()
+  //       next.push({ peerId, mulitaddr: ma, x, y, vx: 0, vy: 0 })
+  //     })
+  //
+  //     return next
+  //   })
+  // }, [containerData])
 
   // WebSocket for controller
   // Receives containers list and node updates
@@ -1001,7 +1110,7 @@ export default function Home() {
           }
         } else {
           // TODO
-          // // connection to non-container peer
+          // // connection to remote peer
           // // Avoid duplicate edges
           // const exists = newEdges.some(
           //   (conn) =>
@@ -1680,6 +1789,39 @@ export default function Home() {
                       title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
                     >
                       {getLabel(container.id)}
+                    </div>
+                  )
+                })}
+
+                {remotePeers.map((r) => {
+                  return (
+                    <div
+                      key={r.peerId}
+                      ref={(el) => {
+                        remotePeerRefs.current[r.peerId] = el
+                      }}
+                      className='container'
+                      // onClick={() => handleContainerClick(container.id)}
+                      // onMouseEnter={() => setHoveredContainerId(container.id)}
+                      // onMouseLeave={() => setHoveredContainerId(null)}
+                      style={{
+                        width: `${nodeSize}px`,
+                        height: `${nodeSize}px`,
+                        lineHeight: `${nodeSize}px`,
+                        left: `${r.x}px`,
+                        top: `${r.y}px`,
+                        fontSize: `${Math.max(8, nodeSize / 3)}px`,
+                        backgroundColor: `darkorange`, //`${getBackgroundColor(container.id)}`,
+                        // opacity: 1, // `${getOpacity(container.id)}`,
+                        // border: `${getBorderStyle(container.id)}`,
+                        // borderRadius: `${getBorderRadius(container.id)}`,
+                        position: 'absolute',
+                        transform: `translate(-50%, -50%)`, // Center the node
+                        transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                      }}
+                      title={`Remote Peer\nPeer ID: ${r.peerId}`}
+                    >
+                      {r.peerId}
                     </div>
                   )
                 })}
