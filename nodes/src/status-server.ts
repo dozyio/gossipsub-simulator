@@ -32,6 +32,17 @@ interface KadPeer {
   lastPing: number
 }
 
+interface RemotePeer {
+  multiaddrs: string[]
+  protocols: string[]
+  // metadata: Map<string, Uint8Array>
+  // tags: Map<string, Tag>
+}
+
+interface RemotePeers {
+  [peerId: string]: RemotePeer
+}
+
 type TopicsPeers = Record<string, string[]>
 
 export interface Update {
@@ -44,7 +55,7 @@ export interface Update {
   fanoutList?: TopicsPeers
   libp2pPeers?: string[]
   connections?: string[] // peer ids
-  connectionsMA?: string[] // multiaddrs
+  remotePeers?: RemotePeers
   protocols?: string[]
   streams?: Streams
   multiaddrs?: string[]
@@ -70,7 +81,7 @@ export class StatusServer {
   private lastType: string = ''
   private lastLibp2pPeers: string[] = []
   private lastConnections: string[] = []
-  private lastConnectionsMA: string[] = []
+  private lastRemotePeers: RemotePeers = {}
   private lastProtocols: string[] = []
   private lastStreams: Streams = {}
   private lastMultiaddrs: string[] = []
@@ -136,11 +147,12 @@ export class StatusServer {
   private handleConnectionEvent = async (evt: CustomEvent) => {
     const connectionList = this.server.getConnections()
     const connections = connectionList.map((connection) => connection.remotePeer.toString())
-    const connectionsMA = connectionList.map((connection) => connection.remoteAddr.toString())
+
+    const remotePeers = await this.getRemotePeers()
 
     const update: Update = {
       connections,
-      connectionsMA,
+      remotePeers,
     }
     await this.sendUpdate(update)
   }
@@ -158,6 +170,32 @@ export class StatusServer {
     }
 
     await this.sendUpdate(update)
+  }
+
+  private getRemotePeers = async (): Promise<RemotePeers> => {
+    const connections = this.server.getConnections()
+    const peerEntries = await Promise.all(
+      connections.map(async (conn) => {
+        try {
+          const peer = await this.server.peerStore.get(conn.remotePeer)
+          const rp: RemotePeer = {
+            multiaddrs: peer.addresses.map((ma) => ma.multiaddr.toString()),
+            protocols: peer.protocols,
+          }
+          // as const so tuple type is preserved
+          return [peer.id.toString(), rp] as const
+        } catch (e) {
+          console.error('error getting remote peer from peerStore', e)
+          return undefined
+        }
+      }),
+    )
+
+    const validEntries = peerEntries.filter((entry): entry is readonly [string, RemotePeer] => entry !== undefined)
+
+    const remotePeers: RemotePeers = Object.fromEntries(validEntries)
+
+    return remotePeers
   }
 
   private getPeerScores = (): PeerScores => {
@@ -400,6 +438,12 @@ export class StatusServer {
     //   update.connections = connections
     // }
 
+    const remotePeers = await this.getRemotePeers()
+    if (!isEqual(remotePeers, this.lastRemotePeers)) {
+      this.lastRemotePeers = remotePeers
+      update.remotePeers = remotePeers
+    }
+
     const streams = this.getStreams()
     if (!isEqual(streams, this.lastStreams)) {
       this.lastStreams = streams
@@ -516,9 +560,9 @@ export class StatusServer {
     this.lastConnections = connections
     update.connections = connections
 
-    const connectionsMA = connectionList.map((connection) => connection.remoteAddr.toString())
-    this.lastConnectionsMA = connectionsMA
-    update.connectionsMA = connectionsMA
+    const remotePeers = await this.getRemotePeers()
+    this.lastRemotePeers = remotePeers
+    update.remotePeers = remotePeers
 
     const streams = this.getStreams()
     this.lastStreams = streams
@@ -585,7 +629,7 @@ export class StatusServer {
       update.meshPeersList ||
       update.libp2pPeers ||
       update.connections ||
-      update.connectionsMA ||
+      update.remotePeers ||
       update.protocols ||
       update.streams ||
       update.multiaddrs ||

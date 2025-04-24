@@ -6,37 +6,26 @@ import { keys } from '@libp2p/crypto'
 import { isPrivateIp } from '@libp2p/utils/private-ip'
 
 export const isEqual = (a: unknown, b: unknown): boolean => {
-  if (a === b) return true;
+  if (a === b) return true
 
-  if (
-    typeof a !== "object" ||
-    typeof b !== "object" ||
-    a === null ||
-    b === null
-  ) {
-    return false;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) {
+    return false
   }
 
-  const keysA = Object.keys(a as Record<string, unknown>);
-  const keysB = Object.keys(b as Record<string, unknown>);
+  const keysA = Object.keys(a as Record<string, unknown>)
+  const keysB = Object.keys(b as Record<string, unknown>)
 
-  if (keysA.length !== keysB.length) return false;
+  if (keysA.length !== keysB.length) return false
 
   for (const key of keysA) {
     // Check if the second object has the key and recursively compare the values
-    if (
-      !keysB.includes(key) ||
-      !isEqual(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key]
-      )
-    ) {
-      return false;
+    if (!keysB.includes(key) || !isEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key])) {
+      return false
     }
   }
 
-  return true;
-};
+  return true
+}
 
 export function stringToDialable(str: string): PeerId | Multiaddr {
   let mp: PeerId | Multiaddr | undefined
@@ -93,17 +82,17 @@ export function applicationScore(p: string) {
 
 export const generateKeyPair = async (seed: string): Promise<Ed25519PrivateKey> => {
   try {
-    const pKey = await keys.generateKeyPairFromSeed('Ed25519', hexStringToUint8Array(seed));
-    return pKey;
+    const pKey = await keys.generateKeyPairFromSeed('Ed25519', hexStringToUint8Array(seed))
+    return pKey
   } catch (error) {
-    console.error('Error generating key pair:', error);
-    throw error; // Re-throw if you want to handle it further up
+    console.error('Error generating key pair:', error)
+    throw error // Re-throw if you want to handle it further up
   }
 }
 
 // Define mapper to remove loopback addresses
 export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo): PeerInfo => {
-  const newMultiaddrs = peer.multiaddrs.filter(multiaddr => {
+  const newMultiaddrs = peer.multiaddrs.filter((multiaddr) => {
     const tuples = multiaddr.stringTuples()
     if (tuples.length === 0) return false
     const [[type, addr]] = tuples
@@ -127,11 +116,12 @@ export const removePublicAddressesLoopbackAddressesMapper = (peer: PeerInfo): Pe
       return false
     }
 
+    // only allow private
     return isPrivate
   })
 
   return {
     ...peer,
-    multiaddrs: newMultiaddrs
+    multiaddrs: newMultiaddrs,
   }
 }
