@@ -856,6 +856,15 @@ export default function Home() {
       if (!peer) {
         // If peer is not in the peerData, skip
         // Currently we need to wait for containerList update - #TODO
+        // But we can remove from remote peers as we know its a container
+
+        setRemotePeerData((remotePeerPrev) => {
+          const merged: RemotePeers = { ...remotePeerPrev }
+          if (merged[data.peerId]) {
+            delete merged[data.peerId]
+          }
+          return merged
+        })
 
         return prev
       }
