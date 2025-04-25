@@ -1,7 +1,7 @@
 import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
 import { FaRegCircle } from 'react-icons/fa'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 interface PortMapping {
   ip: string
@@ -10,7 +10,7 @@ interface PortMapping {
   type: string
 }
 
-interface ContainerInfo {
+interface ContainerData {
   id: string
   names: string[]
   image: string
@@ -37,7 +37,20 @@ interface RRTs {
   [peerId: string]: number
 }
 
-interface ContainerData {
+interface RemotePeerData {
+  multiaddrs: string[]
+  protocols: string[]
+  x?: number
+  y?: number
+  vx?: number // Velocity X
+  vy?: number // Velocity Y
+}
+
+interface RemotePeers {
+  [peerId: string]: RemotePeerData
+}
+
+interface PeerData {
   containerId: string
   id: string // Unique identifier
   peerId: string
@@ -49,7 +62,7 @@ interface ContainerData {
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[]
   connections: string[] // peer ids of connections
-  connectionsMA: string[] // mulitaddr of connections
+  remotePeers: RemotePeers
   protocols: string[]
   multiaddrs: string[]
   streams: StreamsByPeer
@@ -88,7 +101,7 @@ const DEFAULT_FORCES = {
   gravity: 0.05, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 80, // Maximum velocity cap
-  naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
@@ -102,12 +115,15 @@ const mapTypeForces = {
 }
 
 export default function Home() {
-  // containers & peer stuff
-  const [containers, setContainers] = useState<ContainerInfo[]>([])
-  const [imageName, setImageName] = useState<string>('gossip:dev')
-  const [containerData, setContainerData] = useState<{ [id: string]: ContainerData }>({})
+  // container stuff
+  const [containers, setContainers] = useState<ContainerData[]>([])
+
+  // peer and remote peer stuff
+  const [peerData, setPeerData] = useState<{ [containerId: string]: PeerData }>({})
+  const [remotePeerData, setRemotePeerData] = useState<RemotePeers>({})
 
   // ui config
+  const [imageName, setImageName] = useState<string>('gossip:dev')
   const [hoveredContainerId, setHoveredContainerId] = useState<string | null>(null)
   const [converge, setConverge] = useState<boolean>(true)
   const [clickType, setClickType] = useState<ClickType>('info')
@@ -118,6 +134,7 @@ export default function Home() {
   const [selectedProtocols, setSelectedProtocols] = useState<string[]>([])
   const [selectedTopic, setSelectedTopics] = useState<string>('')
   const [selectedContainer, setSelectedContainer] = useState<string>('')
+  const [selectedRemotePeer, setSelectedRemotePeer] = useState<string>('')
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
   const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
@@ -132,9 +149,9 @@ export default function Home() {
   const [gossipDout, setGossipDout] = useState<string>('2')
   const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false)
   const [minLatency, setMinLatency] = useState<string>('20')
-  const [maxLatency, setMaxLatency] = useState<string>('300')
+  const [maxLatency, setMaxLatency] = useState<string>('200')
   const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false)
-  const [packetLoss, setPacketLoss] = useState<string>('10')
+  const [packetLoss, setPacketLoss] = useState<string>('5')
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
   const [disableNoise, setDisableNoise] = useState<boolean>(false)
@@ -143,9 +160,11 @@ export default function Home() {
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
   const prevEdgesRef = useRef(edges) // Store previous connections for comparison
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
+  const remotePeerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const [mapType, setMapType] = useState<MapType>('connections')
   const [mapView, setMapView] = useState<MapView>('graph')
   const stableCountRef = useRef(0) // Track stable state count
+  const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null) // Store interval ID
   const [nodeSize, setNodeSize] = useState<number>(35)
@@ -156,9 +175,9 @@ export default function Home() {
   const reconnectTimeout = useRef<number | null>(null)
   const [controllerStatus, setControllerStatus] = useState<ControllerStatus>('connecting')
 
-  const initializeContainerData = (runningContainers: ContainerInfo[]) => {
-    setContainerData((prevData) => {
-      const newData: { [id: string]: ContainerData } = {}
+  const initializeContainerData = (runningContainers: ContainerData[]): void => {
+    setPeerData((prevData) => {
+      const newData: { [id: string]: PeerData } = {}
 
       runningContainers.forEach((container) => {
         if (prevData[container.id]) {
@@ -179,7 +198,7 @@ export default function Home() {
             fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
             connections: [],
-            connectionsMA: [],
+            remotePeers: {},
             protocols: [],
             multiaddrs: [],
             streams: {},
@@ -201,7 +220,7 @@ export default function Home() {
     })
   }
 
-  const startContainer = async (image: string, env: string[], hostname: string = ''): Promise<ContainerInfo | void> => {
+  const startContainer = async (image: string, env: string[], hostname: string = ''): Promise<ContainerData | void> => {
     try {
       const response = await fetch(`${ENDPOINT}/containers/create`, {
         method: 'POST',
@@ -288,7 +307,7 @@ export default function Home() {
     return env
   }
 
-  const handleStartBootstrap1 = async () => {
+  const handleStartBootstrap1 = async (): Promise<void> => {
     // 12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF
     let env = ['SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd1']
 
@@ -297,7 +316,7 @@ export default function Home() {
     await startContainer('bootstrapper:dev', env, 'bootstrapper1')
   }
 
-  const handleStartBootstrap2 = async () => {
+  const handleStartBootstrap2 = async (): Promise<void> => {
     // 12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw
     let env = ['SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2']
 
@@ -307,13 +326,13 @@ export default function Home() {
   }
 
   // Function to start a new container
-  const handleStartContainer = async () => {
+  const handleStartContainer = async (): Promise<void> => {
     const env = envSetter()
 
     await startContainer(imageName, env)
   }
 
-  const handleStartXContainers = async (amount = 12) => {
+  const handleStartXContainers = async (amount = 10): Promise<void> => {
     try {
       const promises = []
       for (let i = 0; i < amount; i++) {
@@ -327,7 +346,7 @@ export default function Home() {
     }
   }
 
-  const stopContainer = async (containerID: string) => {
+  const stopContainer = async (containerID: string): Promise<void> => {
     try {
       const response = await fetch(`${ENDPOINT}/containers/stop`, {
         method: 'POST',
@@ -350,7 +369,11 @@ export default function Home() {
     }
   }
 
-  const stopAllContainers = async () => {
+  const stopAllContainers = async (): Promise<void> => {
+    setRemotePeerData({})
+    setPeerData({})
+    setContainers([])
+
     try {
       const response = await fetch(`${ENDPOINT}/containers/stopall`, {
         method: 'POST',
@@ -365,7 +388,7 @@ export default function Home() {
     }
   }
 
-  const stopXContainers = async (amount = 5) => {
+  const stopXContainers = async (amount = 5): Promise<void> => {
     // Only stop gossip containers
     const gossipContainers = containers.filter((c) => c.image.includes('gossip'))
     const shuffled = gossipContainers.slice()
@@ -382,7 +405,7 @@ export default function Home() {
 
     for (const container of toStop) {
       try {
-        if (containerData[container.id]?.type === 'bootstrapper') {
+        if (peerData[container.id]?.type === 'bootstrapper') {
           continue
         }
 
@@ -406,7 +429,7 @@ export default function Home() {
     }
   }
 
-  const getLogs = async (containerId: string) => {
+  const getLogs = async (containerId: string): Promise<void> => {
     try {
       const res = await fetch(`${ENDPOINT}/logs`, {
         method: 'POST',
@@ -437,7 +460,7 @@ export default function Home() {
     }
   }
 
-  const startTCPDump = async (containerId: string) => {
+  const startTCPDump = async (containerId: string): Promise<void> => {
     try {
       const res = await fetch(`${ENDPOINT}/tcpdump/start`, {
         method: 'POST',
@@ -454,7 +477,7 @@ export default function Home() {
         throw new Error(`Error starting tcpdump ${res.status}`)
       }
 
-      setContainerData((prevData) => {
+      setPeerData((prevData) => {
         const existing = prevData[containerId]
         if (!existing) return prevData
 
@@ -472,7 +495,7 @@ export default function Home() {
     }
   }
 
-  const stopTCPDump = async (containerId: string) => {
+  const stopTCPDump = async (containerId: string): Promise<void> => {
     try {
       const res = await fetch(`${ENDPOINT}/tcpdump/stop`, {
         method: 'POST',
@@ -485,7 +508,7 @@ export default function Home() {
         throw new Error(`Status ${res.status}`)
       }
 
-      setContainerData((prevData) => {
+      setPeerData((prevData) => {
         const existing = prevData[containerId]
         if (!existing) return prevData
 
@@ -513,7 +536,7 @@ export default function Home() {
     }
   }
 
-  const publishToTopic = async (containerId: string = '', amount = 1) => {
+  const publishToTopic = async (containerId: string = '', amount = 1): Promise<void> => {
     if (containers.length === 0) {
       return
     }
@@ -551,12 +574,22 @@ export default function Home() {
     }
   }
 
-  const showContainerInfo = (containerId: string) => {
-    console.log('Current containerData:', containerData)
+  const showContainerInfo = (containerId: string): void => {
+    console.log('Current containerData:', peerData)
 
-    const data = containerData[containerId]
+    const data = peerData[containerId]
     if (data) {
       console.log(`Container Data for ID ${containerId}:`, data)
+      console.log(`Container Data for ID ${containerId}:`, data.remotePeers)
+    }
+  }
+
+  const showRemotePeerInfo = (peerId: string): void => {
+    console.log('Current remotePeer:', peerId)
+
+    const data = remotePeerData[peerId]
+    if (data) {
+      console.log(`Container Data for ID ${peerId}:`, data)
     }
   }
 
@@ -566,7 +599,7 @@ export default function Home() {
     }
 
     // only supports ipv4 for now
-    const firstNonLoopback = containerData[dstContainerId]?.multiaddrs.find((addr) => {
+    const firstNonLoopback = peerData[dstContainerId]?.multiaddrs.find((addr) => {
       const ipMatch = addr.match(/\/ip4\/([\d.]+)/)
       if (ipMatch && ipMatch[1]) {
         const ip = ipMatch[1]
@@ -583,7 +616,7 @@ export default function Home() {
     await connectTo(srcContainerId, firstNonLoopback)
   }
 
-  const connectTo = async (srcContainerId: string, toMultiaddr: string) => {
+  const connectTo = async (srcContainerId: string, toMultiaddr: string): Promise<void> => {
     if (containers.length === 0) {
       return
     }
@@ -620,7 +653,7 @@ export default function Home() {
 
   const getLabel = (containerId: string): string => {
     const container = containers.find((c) => c.id === containerId)
-    const node = containerData[containerId]
+    const node = peerData[containerId]
 
     if (!container || !node) {
       return ''
@@ -632,7 +665,7 @@ export default function Home() {
     const sourceContainerId = hoveredContainerId || selectedContainer
 
     if (sourceContainerId) {
-      const sourceData = containerData[sourceContainerId]
+      const sourceData = peerData[sourceContainerId]
       if (sourceData) {
         let relatedPeerIds: string[] = []
         let relatedContainerIds: string[] = []
@@ -667,9 +700,7 @@ export default function Home() {
 
         // Map peer IDs to container IDs if necessary
         if (relatedPeerIds?.length > 0) {
-          relatedContainerIds = Object.keys(containerData).filter((id) =>
-            relatedPeerIds.includes(containerData[id]?.peerId),
-          )
+          relatedContainerIds = Object.keys(peerData).filter((id) => relatedPeerIds.includes(peerData[id]?.peerId))
         }
 
         // Check if the current container is related
@@ -693,7 +724,7 @@ export default function Home() {
     return label
   }
 
-  const handleClickType = () => {
+  const handleClickType = (): void => {
     if (clickType === 'kill') {
       setClickType('info')
     }
@@ -711,7 +742,10 @@ export default function Home() {
     }
   }
 
-  const handleContainerClick = (containerId: string) => {
+  const handleContainerClick = (containerId: string): void => {
+    setSelectedRemotePeer('')
+    showRemotePeerInfo('')
+
     if (clickType === 'kill') {
       stopContainer(containerId)
     }
@@ -738,7 +772,20 @@ export default function Home() {
     }
   }
 
-  const handleHoverType = () => {
+  const handleRemotePeerClick = async (peerId: string): Promise<void> => {
+    if (clickType === 'connectTo') {
+      await connectTo(selectedContainer, `${remotePeerData[peerId].multiaddrs[1]}/p2p/${peerId}`)
+      setClickType('connect')
+    }
+
+    setSelectedContainer('')
+    showContainerInfo('')
+    console.log(remotePeerData[peerId])
+    setSelectedRemotePeer(peerId)
+    showRemotePeerInfo(peerId)
+  }
+
+  const handleHoverType = (): void => {
     if (hoverType === 'peerscore') {
       setHoverType('rtt')
     } else {
@@ -758,27 +805,27 @@ export default function Home() {
     })
   }
 
-  const handleTopicSelect = (topic: string) => {
+  const handleTopicSelect = (topic: string): void => {
     setSelectedTopics(topic)
   }
 
-  const getBackgroundColor = (containerId: string) => {
+  const getBackgroundColor = (containerId: string): string => {
     if (converge) {
-      return containerData[containerId]?.lastMessage
+      return peerData[containerId]?.lastMessage
     } else {
       return `#${containerId.substring(0, 6)}`
     }
   }
 
-  const getOpacity = (containerId: string) => {
-    if (containerData[containerId]?.multiaddrs.length >= 1) {
+  const getOpacity = (containerId: string): number => {
+    if (peerData[containerId]?.multiaddrs.length >= 1) {
       return 1
     }
 
     return 0.65 // semi transparent when no multiaddrs
   }
 
-  const getBorderStyle = (containerId: string) => {
+  const getBorderStyle = (containerId: string): string => {
     if (selectedContainer === containerId) {
       return '2px solid White'
     }
@@ -786,8 +833,8 @@ export default function Home() {
     return '0px'
   }
 
-  const getBorderRadius = (containerId: string) => {
-    if (containerData[containerId]?.type === 'bootstrapper') {
+  const getBorderRadius = (containerId: string): string => {
+    if (peerData[containerId]?.type === 'bootstrapper') {
       return '4px'
     }
 
@@ -800,6 +847,7 @@ export default function Home() {
     y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
   })
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
     if (prevConnections.length !== newConnections.length) return false
     return prevConnections.every(
@@ -808,20 +856,75 @@ export default function Home() {
   }
 
   // Function to handle WebSocket messages and update containerData
-  const handleNodeStatusUpdate = (data: ContainerData) => {
-    // console.log('handleNodeStatusUpdate', data)
+  const handleNodeStatusUpdate = (data: PeerData) => {
+    if (isPeerIdAssignedToContainer(data.peerId)) {
+      setRemotePeerData((remotePeerPrev) => {
+        const merged: RemotePeers = { ...remotePeerPrev }
+        if (merged[data.peerId]) {
+          delete merged[data.peerId]
+        }
+        return merged
+      })
+    }
+    setPeerData((prev) => {
+      const peer = prev[data.containerId]
+      if (!peer) {
+        // If peer is not in the peerData, skip
+        // Currently we need to wait for containerList update - #TODO
+        // But we can remove from remote peers as we know its a container
 
-    setContainerData((prevData) => {
-      const existing = prevData[data.containerId]
-      if (!existing) {
-        return prevData // If container is not in the data, skip
+        setRemotePeerData((remotePeerPrev) => {
+          const merged: RemotePeers = { ...remotePeerPrev }
+          if (merged[data.peerId]) {
+            delete merged[data.peerId]
+          }
+          return merged
+        })
+
+        return prev
       }
 
-      // Merge new data with existing containerData while preserving positions and velocities
+      if (data.remotePeers) {
+        setRemotePeerData((remotePeerPrev) => {
+          const merged: RemotePeers = { ...remotePeerPrev }
+
+          for (const [remotePeerId, remotePeerDetails] of Object.entries(data.remotePeers)) {
+            const isContainer = Object.values(prev).some((container) => container.peerId === remotePeerId)
+            if (isContainer) {
+              if (merged[remotePeerId]) {
+                delete merged[remotePeerId]
+              }
+              continue
+            }
+
+            const existing = remotePeerPrev[remotePeerId]
+            if (existing) {
+              // already tracked
+              merged[remotePeerId] = {
+                ...existing,
+                ...remotePeerDetails,
+              }
+            } else {
+              // new remote peer
+              const { x, y } = getRandomPosition()
+              merged[remotePeerId] = {
+                ...remotePeerDetails,
+                x,
+                y,
+                vx: 0,
+                vy: 0,
+              }
+            }
+          }
+
+          return merged
+        })
+      }
+
       return {
-        ...prevData,
+        ...prev,
         [data.containerId]: {
-          ...existing,
+          ...peer,
           ...data,
         },
       }
@@ -868,6 +971,30 @@ export default function Home() {
     }
   }
 
+  const isPeerIdAssignedToContainer = (peerId: string): boolean => {
+    return Object.values(peerData).some((pd) => pd.peerId === peerId)
+  }
+
+  const isRemotePeerConnectedToContainer = (remotePeerId: string): boolean => {
+    return Object.values(peerData).some((pd) => pd.remotePeers.hasOwnProperty(remotePeerId))
+  }
+
+  const allNodes = useMemo(() => {
+    const nodes: Record<string, { x: number; y: number; vx: number; vy: number }> = {}
+
+    Object.values(peerData).forEach((p) => {
+      nodes[p.containerId] = { x: p.x, y: p.y, vx: p.vx, vy: p.vy }
+    })
+
+    Object.entries(remotePeerData).forEach(([id, r]) => {
+      if (!isPeerIdAssignedToContainer(id)) {
+        nodes[id] = { x: r.x || 0, y: r.y || 0, vx: r.vx || 0, vy: r.vy || 0 }
+      }
+    })
+
+    return nodes
+  }, [peerData, remotePeerData])
+
   // WebSocket for controller
   // Receives containers list and node updates
   useEffect(() => {
@@ -894,7 +1021,7 @@ export default function Home() {
           switch (json.mType) {
             case 'containerList':
               // console.log('containerList', json)
-              const updatedContainers: ContainerInfo[] = json.data
+              const updatedContainers: ContainerData[] = json.data
               const runningContainers = updatedContainers.filter((c) => c.state === 'running')
               setContainers(runningContainers)
               initializeContainerData(runningContainers)
@@ -945,83 +1072,265 @@ export default function Home() {
     }
   }, [])
 
-  // Update edges based on current containerData and mapType
+  // Edge generation
   useEffect(() => {
     const newEdges: { from: string; to: string }[] = []
 
-    Object.keys(containerData).forEach((containerId) => {
-      const data = containerData[containerId]
-
+    // Build edges based on selected mapType
+    Object.entries(peerData).forEach(([containerId, data]) => {
       let connectionList: string[] = []
-
       switch (mapType) {
         case 'streams':
-          const streamsByPeer = data.streams
-          if (streamsByPeer && typeof streamsByPeer === 'object') {
-            connectionList = Object.keys(streamsByPeer)
+          connectionList = data.streams ? Object.keys(data.streams) : []
+          break
+        case 'subscribers':
+          connectionList = data.subscribersList?.[selectedTopic] ?? []
+          break
+        case 'meshPeers':
+          connectionList = data.meshPeersList?.[selectedTopic] ?? []
+          break
+        default:
+          // connections, pubsubPeers, libp2pPeers, dhtPeers
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (Array.isArray((data as any)[mapType])) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            connectionList = (data as any)[mapType] as string[]
           }
           break
-        case 'subscribers': {
-          const mapValue = data['subscribersList'][selectedTopic]
-          if (Array.isArray(mapValue)) {
-            connectionList = mapValue
-          }
-          break
-        }
-        case 'meshPeers': {
-          const mapValue = data['meshPeersList'][selectedTopic]
-          if (Array.isArray(mapValue)) {
-            connectionList = mapValue
-          }
-          break
-        }
-        default: {
-          const mapValue = data[mapType]
-          if (Array.isArray(mapValue)) {
-            connectionList = mapValue
-          }
-          break
-        }
       }
 
+      // 1) container → container
       connectionList.forEach((peerId) => {
-        // Find the container that has this peerId
-        const targetContainerId = Object.keys(containerData).find((id) => containerData[id]?.peerId === peerId)
+        const targetCid = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
+        if (targetCid) {
+          newEdges.push({ from: containerId, to: targetCid })
+        }
+      })
 
-        if (targetContainerId) {
-          // Avoid duplicate edges
-          const exists = newEdges.some(
-            (conn) =>
-              (conn.from === containerId && conn.to === targetContainerId) ||
-              (conn.from === targetContainerId && conn.to === containerId),
-          )
-
-          if (!exists) {
-            newEdges.push({ from: containerId, to: targetContainerId })
-          }
-        } else {
-          // TODO
-          // // connection to non-container peer
-          // // Avoid duplicate edges
-          // const exists = newEdges.some(
-          //   (conn) =>
-          //     (conn.from === containerId && conn.to == peerId) ||
-          //     (conn.from === peerId && conn.to === containerId)
-          // );
-          //
-          // if (!exists) {
-          //   newEdges.push({ from: containerId, to: peerId});
-          // }
+      // 2) container → remote via remotePeers if not assigned to a container
+      Object.keys(data.remotePeers || {}).forEach((remotePeerId) => {
+        if (!isPeerIdAssignedToContainer(remotePeerId)) {
+          newEdges.push({ from: containerId, to: remotePeerId })
         }
       })
     })
 
-    const edgesHaveChanged = !areEdgesEqual(prevEdgesRef.current, newEdges)
+    // 3) orphans via  remotePeerData links
+    Object.keys(remotePeerData).forEach((remotePeerId) => {
+      if (!isPeerIdAssignedToContainer(remotePeerId)) {
+        Object.entries(peerData).forEach(([containerId, data]) => {
+          if (data.remotePeers?.[remotePeerId]) {
+            newEdges.push({ from: containerId, to: remotePeerId })
+          }
+        })
+      }
+    })
 
-    if (edgesHaveChanged) {
-      setEdges(newEdges)
+    // dedupe on unordered pairs
+    const uniq = newEdges.filter(
+      (e, i) =>
+        newEdges.findIndex((f) => (f.from === e.from && f.to === e.to) || (f.from === e.to && f.to === e.from)) === i,
+    )
+
+    if (
+      uniq.length !== prevEdgesRef.current.length ||
+      !uniq.every((e, i) => e.from === prevEdgesRef.current[i]?.from && e.to === prevEdgesRef.current[i]?.to)
+    ) {
+      prevEdgesRef.current = uniq
+      setEdges(uniq)
+      console.log('Updated edges:', uniq)
     }
-  }, [containerData, mapType])
+  }, [peerData, remotePeerData, mapType, selectedTopic])
+
+  // // Update node size based on number of containers
+  // useEffect(() => {
+  //   const minSize = 35 // Minimum node size
+  //   const maxSize = 45 // Maximum node size
+  //   const scalingFactor = 5 // Adjust this to control sensitivity
+  //
+  //   if (containers.length === 0) {
+  //     setNodeSize(maxSize) // Default size when no containers
+  //     return
+  //   }
+  //
+  //   // Dynamically scale the node size
+  //   const size = Math.max(minSize, Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor))
+  //
+  //   setNodeSize(size)
+  // }, [containers])
+
+  // Update min distance
+  // useEffect(() => {
+  //   const minDistanceMin = nodeSize * 2 // Minimum allowable distance
+  //   const minDistanceMax = nodeSize * 4 // Maximum allowable distance
+  //   const scalingFactor = 1 // Adjust for sensitivity
+  //
+  //   if (containers.length === 0) {
+  //     setMinDistance(minDistanceMax) // Default when no containers
+  //     return
+  //   }
+  //
+  //   // Dynamically scale the minDistance
+  //   const distance = Math.max(
+  //     minDistanceMin,
+  //     Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
+  //   )
+  //
+  //   setMinDistance(distance)
+  // }, [containers, nodeSize])
+
+  // Compound Spring Embedder Force-Directed Layout Implementation
+  useEffect(() => {
+    if (mapView !== 'graph') return
+
+    const centerX = CONTAINER_WIDTH / 2
+    const centerY = CONTAINER_HEIGHT / 2
+    const VELOCITY_THRESHOLD = 1
+    const STABLE_ITERATIONS = 20
+    const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
+
+    const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
+    if (edgesChanged) {
+      stableCountRef.current = 0
+      unstableCountRef.current = 0
+
+      stabilizedRef.current = false
+      prevEdgesRef.current = edges
+      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+    }
+
+    intervalIdRef.current = window.setInterval(() => {
+      if (stabilizedRef.current && intervalIdRef.current) {
+        window.clearInterval(intervalIdRef.current)
+        return
+      }
+
+      let allStable = true
+      // Clone positions & velocities
+      const updated = { ...allNodes }
+
+      // Compute forces for each nodeId in allNodes
+      Object.entries(updated).forEach(([id, node]) => {
+        let fx = 0
+        let fy = 0
+        // stability
+        if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+          // console.log('id unstable', id)
+          allStable = false
+          stableCountRef.current = 0
+        }
+
+        // 1. Repulsion among all nodes
+        Object.entries(updated).forEach(([oid, other]) => {
+          if (id === oid) return
+          const dx = node.x - other.x
+          const dy = node.y - other.y
+          let dist = Math.sqrt(dx * dx + dy * dy) || 1
+          dist = Math.max(dist, nodeSize)
+          const rep = mapTypeForces[mapType].repulsion / (dist * dist)
+          fx += (dx / dist) * rep
+          fy += (dy / dist) * rep
+        })
+
+        // 2. Attraction along edges
+        edges.forEach((e) => {
+          if (e.from === id || e.to === id) {
+            const otherId = e.from === id ? e.to : e.from
+            const other = updated[otherId]
+            if (!other) return
+            const dx = other.x - node.x
+            const dy = other.y - node.y
+            const dist = Math.sqrt(dx * dx + dy * dy) || 1
+            const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
+            fx += (dx / dist) * attr
+            fy += (dy / dist) * attr
+          }
+        })
+
+        // 3. Central gravity
+        fx += (centerX - node.x) * mapTypeForces[mapType].gravity
+        fy += (centerY - node.y) * mapTypeForces[mapType].gravity
+
+        // 4. Collision
+        Object.entries(updated).forEach(([oid, other]) => {
+          if (id === oid) return
+          const dx = node.x - other.x
+          const dy = node.y - other.y
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1
+          if (dist < minDistance) {
+            const overlap = minDistance - dist
+            const col = (overlap / dist) * mapTypeForces[mapType].collision
+            fx += (dx / dist) * col
+            fy += (dy / dist) * col
+          }
+        })
+
+        // 5. Damping
+        node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
+        node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
+
+        // 6. Cap velocity
+        node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
+        node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
+
+        // 7. Update pos
+        node.x += node.vx
+        node.y += node.vy
+
+        // 8. Boundaries
+        node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
+        node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
+      })
+
+      // Separate updates back to states
+      // Containers
+      setPeerData((prev) => {
+        const next = { ...prev }
+        Object.entries(prev).forEach(([cid]) => {
+          const u = updated[cid]
+          if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+        })
+        return next
+      })
+
+      // Remotes
+      setRemotePeerData((prev) => {
+        const next: RemotePeers = { ...prev }
+        Object.keys(prev).forEach((rid) => {
+          if (isRemotePeerConnectedToContainer(rid)) {
+            const u = updated[rid]
+            if (u) {
+              next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+            }
+          }
+        })
+        return next
+      })
+
+      // stability
+      if (allStable) {
+        stableCountRef.current += 1
+        if (stableCountRef.current >= STABLE_ITERATIONS) {
+          stabilizedRef.current = true
+          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+        }
+      } else {
+        stableCountRef.current = 0
+        unstableCountRef.current += 1
+        if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+          stableCountRef.current = STABLE_ITERATIONS
+          allStable = true
+          stabilizedRef.current = true
+          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+        }
+      }
+    }, 30)
+
+    return () => {
+      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+    }
+  }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
 
   // Auto publish if enabled
   useEffect(() => {
@@ -1032,198 +1341,6 @@ export default function Home() {
     }, Number(autoPublishInterval))
     return () => clearInterval(interval)
   }, [autoPublish, containers])
-
-  // Update node size based on number of containers
-  useEffect(() => {
-    const minSize = 35 // Minimum node size
-    const maxSize = 45 // Maximum node size
-    const scalingFactor = 5 // Adjust this to control sensitivity
-
-    if (containers.length === 0) {
-      setNodeSize(maxSize) // Default size when no containers
-      return
-    }
-
-    // Dynamically scale the node size
-    const size = Math.max(minSize, Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor))
-
-    setNodeSize(size)
-  }, [containers])
-
-  // Update min distance
-  useEffect(() => {
-    const minDistanceMin = nodeSize * 2 // Minimum allowable distance
-    const minDistanceMax = nodeSize * 4 // Maximum allowable distance
-    const scalingFactor = 1 // Adjust for sensitivity
-
-    if (containers.length === 0) {
-      setMinDistance(minDistanceMax) // Default when no containers
-      return
-    }
-
-    // Dynamically scale the minDistance
-    const distance = Math.max(
-      minDistanceMin,
-      Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
-    )
-
-    setMinDistance(distance)
-  }, [containers, nodeSize])
-
-  // Compound Spring Embedder Force-Directed Layout Implementation
-  useEffect(() => {
-    // console.log('useEffect triggered');
-    if (mapView !== 'graph') return
-
-    const centerX = CONTAINER_WIDTH / 2
-    const centerY = CONTAINER_HEIGHT / 2
-    const VELOCITY_THRESHOLD = 0.015 // Threshold for stability
-    const STABLE_ITERATIONS = 25 // Number of iterations required to consider stable
-
-    const edgesHaveChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-
-    if (edgesHaveChanged) {
-      console.log('Edges changed. Resetting stabilization.')
-      stableCountRef.current = 0 // Reset stability count
-      stabilizedRef.current = false // Mark the graph as not stabilized
-      prevEdgesRef.current = edges // Update stored edges
-      if (intervalIdRef.current !== null) {
-        window.clearInterval(intervalIdRef.current) // Clear the existing interval
-      }
-    }
-
-    const interval = window.setInterval(() => {
-      if (stabilizedRef.current) {
-        window.clearInterval(intervalIdRef.current!) // Stop the interval if already stabilized
-        return
-      }
-
-      let allStable = true // Flag to check if all nodes are stable
-
-      setContainerData((prevData) => {
-        const updatedData: { [id: string]: ContainerData } = { ...prevData }
-
-        Object.values(updatedData).forEach((node) => {
-          let fx = 0
-          let fy = 0
-
-          // Check node stability
-          if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-            allStable = false // Node is still moving
-            // console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
-            stableCountRef.current = 0
-          }
-
-          // 1. Repulsive Forces between all node pairs
-          Object.values(updatedData).forEach((otherNode) => {
-            if (node.id === otherNode.id) return
-
-            const dx = node.x - otherNode.x
-            const dy = node.y - otherNode.y
-            let distance = Math.sqrt(dx * dx + dy * dy) || 1
-
-            // Prevent division by zero and excessive repulsion
-            distance = Math.max(distance, minDistance)
-
-            const repulsion = mapTypeForces[mapType].repulsion / (distance * distance)
-            fx += (dx / distance) * repulsion
-            fy += (dy / distance) * repulsion
-          })
-
-          // 2. Attractive Forces for connected nodes
-          edges.forEach((conn) => {
-            if (conn.from === node.id) {
-              const targetNode = updatedData[conn.to]
-              if (targetNode) {
-                const dx = targetNode.x - node.x
-                const dy = targetNode.y - node.y
-                const distance = Math.sqrt(dx * dx + dy * dy) || 1
-
-                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-                fx += (dx / distance) * attraction
-                fy += (dy / distance) * attraction
-              }
-            } else if (conn.to === node.id) {
-              const targetNode = updatedData[conn.from]
-              if (targetNode) {
-                const dx = targetNode.x - node.x
-                const dy = targetNode.y - node.y
-                const distance = Math.sqrt(dx * dx + dy * dy) || 1
-
-                const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-
-                fx += (dx / distance) * attraction
-                fy += (dy / distance) * attraction
-              }
-            }
-          })
-
-          // 3. Central Gravity Force
-          const dxCenter = centerX - node.x
-          const dyCenter = centerY - node.y
-          fx += dxCenter * mapTypeForces[mapType].gravity
-          fy += dyCenter * mapTypeForces[mapType].gravity
-
-          // 4. Collision Detection and Resolution
-          Object.values(updatedData).forEach((otherNode) => {
-            if (node.id === otherNode.id) return
-
-            const dx = node.x - otherNode.x
-            const dy = node.y - otherNode.y
-            const distance = Math.sqrt(dx * dx + dy * dy) || 1
-
-            if (distance < minDistance) {
-              const overlap = minDistance - distance
-              const collision = (overlap / distance) * mapTypeForces[mapType].collision
-              fx += (dx / distance) * collision
-              fy += (dy / distance) * collision
-            }
-          })
-
-          // 5. Update Velocities with Damping
-          node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-          node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-
-          // 6. Cap Velocities to Prevent Overshooting
-          node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-          node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-
-          // 7. Update Positions
-          node.x += node.vx
-          node.y += node.vy
-
-          // 8. Boundary Enforcement: Keep Nodes Within Container
-          node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-          node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-        })
-
-        return updatedData
-      })
-      // Update stability state
-      if (allStable) {
-        stableCountRef.current += 1
-        // console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
-        if (stableCountRef.current >= STABLE_ITERATIONS) {
-          // console.log('Graph has stabilized.');
-          stabilizedRef.current = true // Mark the graph as stabilized
-          window.clearInterval(intervalIdRef.current!) // Stop the interval
-        }
-      } else {
-        if (stableCountRef.current > 0) {
-          console.log('Graph became unstable again. Resetting stable count.')
-        }
-        stableCountRef.current = 0 // Reset stability count if instability is detected
-      }
-    }, 30) // Update every 30ms for smooth animation
-
-    intervalIdRef.current = interval // Store the interval ID for cleanup
-
-    return () => {
-      if (intervalIdRef.current !== null) {
-        window.clearInterval(intervalIdRef.current) // Ensure interval is cleared on unmount
-      }
-    }
-  }, [edges, mapView, mapType, containers, selectedTopic])
 
   return (
     <>
@@ -1236,10 +1353,10 @@ export default function Home() {
       <div className='app-container'>
         {/* Sidebar 1: Controls */}
         <div className='sidebar sidebar1'>
-          <h3>Settings</h3>
+          <h3>Container Settings</h3>
           <div className='input-group'>
             <label>
-              Container Image Name:
+              Image name:
               <input type='text' value={imageName} onChange={(e) => setImageName(e.target.value)} />
             </label>
           </div>
@@ -1554,8 +1671,9 @@ export default function Home() {
               <div>
                 <svg className='edges'>
                   {edges.map((conn, index) => {
-                    const fromNode = containerData[conn.from]
-                    const toNode = containerData[conn.to]
+                    const fromNode = allNodes[conn.from]
+                    const toNode = allNodes[conn.to]
+                    if (!fromNode || !toNode) return null
 
                     if (fromNode && toNode) {
                       // Ensure both nodes have valid positions
@@ -1572,8 +1690,8 @@ export default function Home() {
                       let connectionProtocol: string | null = null
 
                       if (mapType === 'streams') {
-                        const toPeerId = containerData[conn.to]?.peerId
-                        const fromStreams = containerData[conn.from]?.streams[toPeerId]
+                        const toPeerId = peerData[conn.to]?.peerId
+                        const fromStreams = peerData[conn.from]?.streams[toPeerId]
 
                         if (
                           toPeerId &&
@@ -1585,8 +1703,8 @@ export default function Home() {
                           connectionProtocol = fromStreams[0].protocol.trim().toLowerCase()
                         } else {
                           // Try the reverse: from to to from
-                          const fromPeerId = containerData[conn.from]?.peerId
-                          const toStreams = containerData[conn.to]?.streams[fromPeerId]
+                          const fromPeerId = peerData[conn.from]?.peerId
+                          const toStreams = peerData[conn.to]?.streams[fromPeerId]
 
                           if (
                             fromPeerId &&
@@ -1649,7 +1767,7 @@ export default function Home() {
                 </svg>
 
                 {containers.map((container) => {
-                  const node = containerData[container.id]
+                  const node = peerData[container.id]
                   if (!node) return null // Ensure node data exists
 
                   return (
@@ -1677,11 +1795,52 @@ export default function Home() {
                         transform: `translate(-50%, -50%)`, // Center the node
                         transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
                       }}
-                      title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
+                      title={`Container ID: ${container.id}\nPeer ID: ${peerData[container.id]?.peerId || 'Loading...'}`}
                     >
                       {getLabel(container.id)}
                     </div>
                   )
+                })}
+
+                {Object.keys(remotePeerData).map((k) => {
+                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                  for (const [_, containerDetails] of Object.entries(peerData)) {
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    for (const [remotePeerId, _] of Object.entries(containerDetails.remotePeers)) {
+                      if (k === remotePeerId) {
+                        return (
+                          <div
+                            key={k}
+                            ref={(el) => {
+                              remotePeerRefs.current[k] = el
+                            }}
+                            className='container remotepeer'
+                            onClick={() => handleRemotePeerClick(k)}
+                            // onMouseEnter={() => setHoveredContainerId(container.id)}
+                            // onMouseLeave={() => setHoveredContainerId(null)}
+                            style={{
+                              width: `${nodeSize}px`,
+                              height: `${nodeSize}px`,
+                              lineHeight: `${nodeSize}px`,
+                              left: `${remotePeerData[k].x}px`,
+                              top: `${remotePeerData[k].y}px`,
+                              fontSize: `${Math.max(8, nodeSize / 3)}px`,
+                              backgroundColor: `darkorange`, //`${getBackgroundColor(container.id)}`,
+                              // opacity: 1, // `${getOpacity(container.id)}`,
+                              // border: `${getBorderStyle(container.id)}`,
+                              // borderRadius: `${getBorderRadius(container.id)}`,
+                              position: 'absolute',
+                              transform: `translate(-50%, -50%)`, // Center the node
+                              transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                            }}
+                            title={`Remote Peer\nPeer ID: ${k}`}
+                          >
+                            {k}
+                          </div>
+                        )
+                      }
+                    }
+                  }
                 })}
               </div>
             )}
@@ -1709,8 +1868,8 @@ export default function Home() {
                       let connectionProtocol: string | null = null
 
                       if (mapType === 'streams') {
-                        const toPeerId = containerData[conn.to]?.peerId
-                        const fromStreams = containerData[conn.from]?.streams[toPeerId]
+                        const toPeerId = peerData[conn.to]?.peerId
+                        const fromStreams = peerData[conn.from]?.streams[toPeerId]
 
                         if (
                           toPeerId &&
@@ -1722,8 +1881,8 @@ export default function Home() {
                           connectionProtocol = fromStreams[0].protocol.trim().toLowerCase()
                         } else {
                           // Try the reverse: from to to from
-                          const fromPeerId = containerData[conn.from]?.peerId
-                          const toStreams = containerData[conn.to]?.streams[fromPeerId]
+                          const fromPeerId = peerData[conn.from]?.peerId
+                          const toStreams = peerData[conn.to]?.streams[fromPeerId]
 
                           if (
                             fromPeerId &&
@@ -1804,7 +1963,7 @@ export default function Home() {
                         borderRadius: `${getBorderRadius(container.id)}`,
                         transition: 'background-color 0.1s, border 0.1s',
                       }}
-                      title={`Container ID: ${container.id}\nPeer ID: ${containerData[container.id]?.peerId || 'Loading...'}`}
+                      title={`Container ID: ${container.id}\nPeer ID: ${peerData[container.id]?.peerId || 'Loading...'}`}
                     >
                       {getLabel(container.id)}
                     </div>
@@ -1859,7 +2018,28 @@ export default function Home() {
           )}
           <button onClick={() => publishToTopic('', 1)}>Publish to random peer</button>
           <button onClick={() => publishToTopic('', 1000)}>Publish 1k to random peers</button>
-          {selectedContainer && containerData[selectedContainer] && (
+          {selectedRemotePeer && remotePeerData[selectedRemotePeer] && (
+            <div>
+              <h3>Remote Peer</h3>
+              <p>Peer ID: {selectedRemotePeer}</p>
+              <div>
+                Protocols:{' '}
+                {remotePeerData[selectedRemotePeer]?.protocols?.map((p, index) => (
+                  <p key={index} style={{ marginLeft: '1rem' }}>
+                    {p}
+                  </p>
+                ))}
+              </div>
+              <div>
+                Multiaddrs: {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+              </div>
+              <div>x: {remotePeerData[selectedRemotePeer].x}</div>
+              <div>y: {remotePeerData[selectedRemotePeer].y}</div>
+              <div>xv: {remotePeerData[selectedRemotePeer].vx}</div>
+              <div>yv: {remotePeerData[selectedRemotePeer].vy}</div>
+            </div>
+          )}
+          {selectedContainer && peerData[selectedContainer] && (
             <div>
               <h3>Peer Info</h3>
 
@@ -1878,29 +2058,29 @@ export default function Home() {
                   Stop
                 </button>
                 <button onClick={() => getLogs(selectedContainer)}>Logs</button>
-                {!containerData[selectedContainer].tcpdumping && (
+                {!peerData[selectedContainer].tcpdumping && (
                   <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
                 )}
-                {containerData[selectedContainer].tcpdumping && (
+                {peerData[selectedContainer].tcpdumping && (
                   <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
                 )}
               </div>
               <div>Container ID: {selectedContainer}</div>
-              <p>Type: {containerData[selectedContainer]?.type}</p>
-              <p>Peer ID: {containerData[selectedContainer]?.peerId}</p>
-              <div>Connections: {containerData[selectedContainer]?.connections.length}</div>
-              <div>
-                {containerData[selectedContainer]?.connectionsMA.map((ma) => (
-                  <div key={ma} style={{ marginLeft: '1rem' }}>
-                    {ma}
+              <p>Type: {peerData[selectedContainer]?.type}</p>
+              <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
+              <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
+              {/*<div>
+                {peerData[selectedContainer]?.remotePeers.map((r) => (
+                  <div key={r.peerId} style={{ marginLeft: '1rem' }}>
+                    {r.multiaddrs}
                   </div>
                 ))}
-              </div>
-              <div>Connect+perf: {Math.round(containerData[selectedContainer]?.connectTime)}ms</div>
+              </div>*/}
+              <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
-              {Object.keys(containerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
+              {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
                 <div>
-                  {Object.entries(containerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
+                  {Object.entries(peerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
                     <div key={topic} style={{ marginLeft: '1rem' }}>
                       {topic}: {Array.isArray(peers) ? peers.length : 0} peers
                     </div>
@@ -1912,9 +2092,9 @@ export default function Home() {
               {/* <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div> */}
               {/* <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div> */}
               <div>Subscribers</div>
-              {Object.keys(containerData[selectedContainer]?.subscribersList || {}).length > 0 ? (
+              {Object.keys(peerData[selectedContainer]?.subscribersList || {}).length > 0 ? (
                 <div>
-                  {Object.entries(containerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
+                  {Object.entries(peerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
                     <div key={topic} style={{ marginLeft: '1rem' }}>
                       {topic}: {Array.isArray(peers) ? peers.length : 0} peers
                     </div>
@@ -1925,24 +2105,24 @@ export default function Home() {
               )}
               <div>
                 Topics:{' '}
-                {containerData[selectedContainer]?.topics?.map((p, index) => (
+                {peerData[selectedContainer]?.topics?.map((p, index) => (
                   <p key={index} style={{ marginLeft: '1rem' }}>
                     {p}
                   </p>
                 ))}
               </div>
-              <div>Pubsub Peer Store: {containerData[selectedContainer]?.pubsubPeers?.length}</div>
-              <div>Libp2p Peer Store: {containerData[selectedContainer]?.libp2pPeers?.length}</div>
+              <div>Pubsub Peer Store: {peerData[selectedContainer]?.pubsubPeers?.length}</div>
+              <div>Libp2p Peer Store: {peerData[selectedContainer]?.libp2pPeers?.length}</div>
               <div>
                 Protocols:{' '}
-                {containerData[selectedContainer]?.protocols?.map((p, index) => (
+                {peerData[selectedContainer]?.protocols?.map((p, index) => (
                   <p key={index} style={{ marginLeft: '1rem' }}>
                     {p}
                   </p>
                 ))}
               </div>
               <div>
-                Multiaddrs: {containerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+                Multiaddrs: {peerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
               </div>
             </div>
           )}
