@@ -164,6 +164,7 @@ export default function Home() {
   const [mapType, setMapType] = useState<MapType>('connections')
   const [mapView, setMapView] = useState<MapView>('graph')
   const stableCountRef = useRef(0) // Track stable state count
+  const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null) // Store interval ID
   const [nodeSize, setNodeSize] = useState<number>(35)
@@ -331,7 +332,7 @@ export default function Home() {
     await startContainer(imageName, env)
   }
 
-  const handleStartXContainers = async (amount = 12): Promise<void> => {
+  const handleStartXContainers = async (amount = 10): Promise<void> => {
     try {
       const promises = []
       for (let i = 0; i < amount; i++) {
@@ -771,7 +772,12 @@ export default function Home() {
     }
   }
 
-  const handleRemotePeerClick = (peerId: string): void => {
+  const handleRemotePeerClick = async (peerId: string): Promise<void> => {
+    if (clickType === 'connectTo') {
+      await connectTo(selectedContainer, `${remotePeerData[peerId].multiaddrs[1]}/p2p/${peerId}`)
+      setClickType('connect')
+    }
+
     setSelectedContainer('')
     showContainerInfo('')
     console.log(remotePeerData[peerId])
@@ -1182,10 +1188,13 @@ export default function Home() {
     const centerY = CONTAINER_HEIGHT / 2
     const VELOCITY_THRESHOLD = 1
     const STABLE_ITERATIONS = 20
+    const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
 
     const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
     if (edgesChanged) {
       stableCountRef.current = 0
+      unstableCountRef.current = 0
+
       stabilizedRef.current = false
       prevEdgesRef.current = edges
       if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
@@ -1207,6 +1216,7 @@ export default function Home() {
         let fy = 0
         // stability
         if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+          // console.log('id unstable', id)
           allStable = false
           stableCountRef.current = 0
         }
@@ -1307,6 +1317,13 @@ export default function Home() {
         }
       } else {
         stableCountRef.current = 0
+        unstableCountRef.current += 1
+        if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+          stableCountRef.current = STABLE_ITERATIONS
+          allStable = true
+          stabilizedRef.current = true
+          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+        }
       }
     }, 30)
 
@@ -1657,8 +1674,6 @@ export default function Home() {
                     const fromNode = allNodes[conn.from]
                     const toNode = allNodes[conn.to]
                     if (!fromNode || !toNode) return null
-                    // const fromNode = peerData[conn.from]
-                    // const toNode = peerData[conn.to]
 
                     if (fromNode && toNode) {
                       // Ensure both nodes have valid positions
@@ -2020,6 +2035,8 @@ export default function Home() {
               </div>
               <div>x: {remotePeerData[selectedRemotePeer].x}</div>
               <div>y: {remotePeerData[selectedRemotePeer].y}</div>
+              <div>xv: {remotePeerData[selectedRemotePeer].vx}</div>
+              <div>yv: {remotePeerData[selectedRemotePeer].vy}</div>
             </div>
           )}
           {selectedContainer && peerData[selectedContainer] && (
