@@ -969,6 +969,10 @@ export default function Home() {
     return Object.values(peerData).some((pd) => pd.peerId === peerId)
   }
 
+  const isRemotePeerConnectedToContainer = (remotePeerId: string): boolean => {
+    return Object.values(peerData).some((pd) => pd.remotePeers.hasOwnProperty(remotePeerId))
+  }
+
   const allNodes = useMemo(() => {
     const nodes: Record<string, { x: number; y: number; vx: number; vy: number }> = {}
 
@@ -1171,167 +1175,13 @@ export default function Home() {
   // }, [containers, nodeSize])
 
   // Compound Spring Embedder Force-Directed Layout Implementation
-  // useEffect(() => {
-  //   // console.log('useEffect triggered');
-  //   if (mapView !== 'graph') return
-  //
-  //   const centerX = CONTAINER_WIDTH / 2
-  //   const centerY = CONTAINER_HEIGHT / 2
-  //   const VELOCITY_THRESHOLD = 0.015 // Threshold for stability
-  //   const STABLE_ITERATIONS = 25 // Number of iterations required to consider stable
-  //
-  //   const edgesHaveChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-  //
-  //   if (edgesHaveChanged) {
-  //     // console.log('Edges changed. Resetting stabilization.')
-  //     stableCountRef.current = 0 // Reset stability count
-  //     stabilizedRef.current = false // Mark the graph as not stabilized
-  //     prevEdgesRef.current = edges // Update stored edges
-  //     if (intervalIdRef.current !== null) {
-  //       window.clearInterval(intervalIdRef.current) // Clear the existing interval
-  //     }
-  //   }
-  //
-  //   const interval = window.setInterval(() => {
-  //     if (stabilizedRef.current) {
-  //       window.clearInterval(intervalIdRef.current!) // Stop the interval if already stabilized
-  //       return
-  //     }
-  //
-  //     let allStable = true // Flag to check if all nodes are stable
-  //
-  //     setPeerData((prevData) => {
-  //       const updatedData: { [id: string]: PeerData } = { ...prevData }
-  //
-  //       Object.values(updatedData).forEach((node) => {
-  //         let fx = 0
-  //         let fy = 0
-  //
-  //         // Check node stability
-  //         if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-  //           allStable = false // Node is still moving
-  //           // console.log(`Node ${node.id} not stable. Velocity: (${node.vx}, ${node.vy})`);
-  //           stableCountRef.current = 0
-  //         }
-  //
-  //         // 1. Repulsive Forces between all node pairs
-  //         Object.values(updatedData).forEach((otherNode) => {
-  //           if (node.id === otherNode.id) return
-  //
-  //           const dx = node.x - otherNode.x
-  //           const dy = node.y - otherNode.y
-  //           let distance = Math.sqrt(dx * dx + dy * dy) || 1
-  //
-  //           // Prevent division by zero and excessive repulsion
-  //           distance = Math.max(distance, minDistance)
-  //
-  //           const repulsion = mapTypeForces[mapType].repulsion / (distance * distance)
-  //           fx += (dx / distance) * repulsion
-  //           fy += (dy / distance) * repulsion
-  //         })
-  //
-  //         // 2. Attractive Forces for connected nodes
-  //         edges.forEach((conn) => {
-  //           if (conn.from === node.id) {
-  //             const targetNode = updatedData[conn.to]
-  //             if (targetNode) {
-  //               const dx = targetNode.x - node.x
-  //               const dy = targetNode.y - node.y
-  //               const distance = Math.sqrt(dx * dx + dy * dy) || 1
-  //
-  //               const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-  //               fx += (dx / distance) * attraction
-  //               fy += (dy / distance) * attraction
-  //             }
-  //           } else if (conn.to === node.id) {
-  //             const targetNode = updatedData[conn.from]
-  //             if (targetNode) {
-  //               const dx = targetNode.x - node.x
-  //               const dy = targetNode.y - node.y
-  //               const distance = Math.sqrt(dx * dx + dy * dy) || 1
-  //
-  //               const attraction = (distance - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-  //
-  //               fx += (dx / distance) * attraction
-  //               fy += (dy / distance) * attraction
-  //             }
-  //           }
-  //         })
-  //
-  //         // 3. Central Gravity Force
-  //         const dxCenter = centerX - node.x
-  //         const dyCenter = centerY - node.y
-  //         fx += dxCenter * mapTypeForces[mapType].gravity
-  //         fy += dyCenter * mapTypeForces[mapType].gravity
-  //
-  //         // 4. Collision Detection and Resolution
-  //         Object.values(updatedData).forEach((otherNode) => {
-  //           if (node.id === otherNode.id) return
-  //
-  //           const dx = node.x - otherNode.x
-  //           const dy = node.y - otherNode.y
-  //           const distance = Math.sqrt(dx * dx + dy * dy) || 1
-  //
-  //           if (distance < minDistance) {
-  //             const overlap = minDistance - distance
-  //             const collision = (overlap / distance) * mapTypeForces[mapType].collision
-  //             fx += (dx / distance) * collision
-  //             fy += (dy / distance) * collision
-  //           }
-  //         })
-  //
-  //         // 5. Update Velocities with Damping
-  //         node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-  //         node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-  //
-  //         // 6. Cap Velocities to Prevent Overshooting
-  //         node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-  //         node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-  //
-  //         // 7. Update Positions
-  //         node.x += node.vx
-  //         node.y += node.vy
-  //
-  //         // 8. Boundary Enforcement: Keep Nodes Within Container
-  //         node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-  //         node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-  //       })
-  //
-  //       return updatedData
-  //     })
-  //
-  //     // Update stability state
-  //     if (allStable) {
-  //       stableCountRef.current += 1
-  //       // console.log(`Stable Count: ${stableCountRef.current}, All Stable: true`);
-  //       if (stableCountRef.current >= STABLE_ITERATIONS) {
-  //         // console.log('Graph has stabilized.');
-  //         stabilizedRef.current = true // Mark the graph as stabilized
-  //         window.clearInterval(intervalIdRef.current!) // Stop the interval
-  //       }
-  //     } else {
-  //       if (stableCountRef.current > 0) {
-  //         console.log('Graph became unstable again. Resetting stable count.')
-  //       }
-  //       stableCountRef.current = 0 // Reset stability count if instability is detected
-  //     }
-  //   }, 30) // Update every 30ms for smooth animation
-  //
-  //   intervalIdRef.current = interval // Store the interval ID for cleanup
-  //
-  //   return () => {
-  //     if (intervalIdRef.current !== null) {
-  //       window.clearInterval(intervalIdRef.current) // Ensure interval is cleared on unmount
-  //     }
-  //   }
-  // }, [edges, mapView, mapType, containers, selectedTopic])
   useEffect(() => {
     if (mapView !== 'graph') return
 
     const centerX = CONTAINER_WIDTH / 2
     const centerY = CONTAINER_HEIGHT / 2
-    const VELOCITY_THRESHOLD = 0.015
-    const STABLE_ITERATIONS = 25
+    const VELOCITY_THRESHOLD = 1
+    const STABLE_ITERATIONS = 20
 
     const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
     if (edgesChanged) {
@@ -1353,8 +1203,8 @@ export default function Home() {
 
       // Compute forces for each nodeId in allNodes
       Object.entries(updated).forEach(([id, node]) => {
-        let fx = 0,
-          fy = 0
+        let fx = 0
+        let fy = 0
         // stability
         if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
           allStable = false
@@ -1398,8 +1248,8 @@ export default function Home() {
           const dx = node.x - other.x
           const dy = node.y - other.y
           const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          if (dist < nodeSize) {
-            const overlap = nodeSize - dist
+          if (dist < minDistance) {
+            const overlap = minDistance - dist
             const col = (overlap / dist) * mapTypeForces[mapType].collision
             fx += (dx / dist) * col
             fy += (dy / dist) * col
@@ -1409,12 +1259,15 @@ export default function Home() {
         // 5. Damping
         node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
         node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
+
         // 6. Cap velocity
         node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
         node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
+
         // 7. Update pos
         node.x += node.vx
         node.y += node.vy
+
         // 8. Boundaries
         node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
         node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
@@ -1430,12 +1283,17 @@ export default function Home() {
         })
         return next
       })
+
       // Remotes
       setRemotePeerData((prev) => {
         const next: RemotePeers = { ...prev }
         Object.keys(prev).forEach((rid) => {
-          const u = updated[rid]
-          if (u) next[rid] = { x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+          if (isRemotePeerConnectedToContainer(rid)) {
+            const u = updated[rid]
+            if (u) {
+              next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+            }
+          }
         })
         return next
       })
@@ -1447,6 +1305,8 @@ export default function Home() {
           stabilizedRef.current = true
           if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
         }
+      } else {
+        stableCountRef.current = 0
       }
     }, 30)
 
