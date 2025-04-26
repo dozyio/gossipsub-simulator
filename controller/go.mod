@@ -1,6 +1,6 @@
 module github.com/dozyio/gossip-simulator/controller
 
-go 1.23.1
+go 1.24.2
 
 require (
 	github.com/docker/docker v27.3.1+incompatible

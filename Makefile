@@ -13,7 +13,7 @@ net:
 	docker network create -d bridge --subnet=172.20.0.0/16 --opt com.docker.network.bridge.name=tc-network ${NETWORK} || true
 
 controller: net
-	cd controller && NETWORK=${NETWORK} go run main.go
+	cd controller && go build -o controller main.go && NETWORK=${NETWORK} ./controller
 
 stop:
 	docker network rm ${NETWORK} || true

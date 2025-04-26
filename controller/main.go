@@ -86,9 +86,7 @@ type ContainerWSReq struct {
 	Topic   string `json:"topic,omitempty"`
 }
 
-func listContainers() ([]ContainerInfo, error) {
-	ctx := context.Background()
-
+func listContainers(ctx context.Context) ([]ContainerInfo, error) {
 	containers, err := DockerClient.ContainerList(
 		ctx,
 		container.ListOptions{
@@ -127,7 +125,9 @@ func listContainers() ([]ContainerInfo, error) {
 
 // broadcastContainers sends the current list of running containers to all connected WebSocket clients
 func broadcastContainers() {
-	containerInfos, err := listContainers()
+	ctx := context.Background()
+
+	containerInfos, err := listContainers(ctx)
 	if err != nil {
 		fmt.Printf("Failed to list containers for broadcast: %v\n", err)
 		return
@@ -160,8 +160,7 @@ func broadcastToClients(data []byte) {
 	}
 }
 
-func startContainer(containerID string) error {
-	ctx := context.Background()
+func startContainer(ctx context.Context, containerID string) error {
 	if err := DockerClient.ContainerStart(ctx, containerID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container %s: %w", containerID, err)
 	}
@@ -176,15 +175,13 @@ func startContainer(containerID string) error {
 	return nil
 }
 
-func stopContainer(containerID string) error {
-	ctx := context.Background()
-
+func stopContainer(ctx context.Context, containerID string) error {
 	containerJSON, err := DockerClient.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("failed to inspect container %s: %w", containerID, err)
 	}
 
-	timeout := 0
+	timeout := 1
 	if containerJSON.State.Running {
 		if err := DockerClient.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout, Signal: "SIGKILL"}); err != nil {
 			return fmt.Errorf("failed to stop container %s: %w", containerID, err)
@@ -205,9 +202,7 @@ func stopContainer(containerID string) error {
 	return nil
 }
 
-func stopAllContainers() error {
-	ctx := context.Background()
-
+func stopAllContainers(ctx context.Context) error {
 	filterArgs := filters.NewArgs()
 	filterArgs.Add("label", "managed_by="+appLabel)
 
@@ -287,8 +282,7 @@ func ensureNetwork(cli *client.Client, networkName string) error {
 	return nil
 }
 
-func createAndStartContainer(imageName, containerName string, containerPort int, env []string, hostname string) (string, int, error) {
-	ctx := context.Background()
+func createAndStartContainer(ctx context.Context, imageName, containerName string, containerPort int, env []string, hostname string) (string, int, error) {
 	cli := DockerClient
 
 	networkName := os.Getenv("NETWORK")
@@ -401,7 +395,7 @@ func createAndStartContainer(imageName, containerName string, containerPort int,
 	if err != nil {
 		fmt.Printf("failed to set container id: %s, %s - stopping container\n", containerJSON.ID[:12], err)
 
-		stopErr := stopContainer(resp.ID)
+		stopErr := stopContainer(ctx, resp.ID)
 		if stopErr != nil {
 			fmt.Printf("failed to stop container id: %s\n", containerJSON.ID[:12])
 			return "", 0, stopErr
@@ -732,7 +726,7 @@ func getEnvValue(env []string, key string) string {
 
 // HTTP Handlers
 func listContainersHandler(w http.ResponseWriter, r *http.Request) {
-	containerInfos, err := listContainers()
+	containerInfos, err := listContainers(r.Context())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to list containers: %v", err), http.StatusInternalServerError)
 		return
@@ -751,7 +745,7 @@ func startContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := startContainer(reqBody.ContainerID); err != nil {
+	if err := startContainer(r.Context(), reqBody.ContainerID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to start container %s: %v", reqBody.ContainerID, err), http.StatusInternalServerError)
 		return
 	}
@@ -768,7 +762,7 @@ func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := stopContainer(reqBody.ContainerID); err != nil {
+	if err := stopContainer(r.Context(), reqBody.ContainerID); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to stop container %s: %v", reqBody.ContainerID, err), http.StatusInternalServerError)
 		return
 	}
@@ -777,7 +771,7 @@ func stopContainerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func stopAllContainersHandler(w http.ResponseWriter, r *http.Request) {
-	if err := stopAllContainers(); err != nil {
+	if err := stopAllContainers(r.Context()); err != nil {
 		http.Error(w, fmt.Sprintf("Failed to stop all containers: %v", err), http.StatusInternalServerError)
 		return
 	}
@@ -806,6 +800,7 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	containerID, hostPort, err := createAndStartContainer(
+		r.Context(),
 		reqBody.Image,
 		reqBody.Name,
 		reqBody.Port,
@@ -1133,7 +1128,7 @@ func tcpdumpStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filename := fmt.Sprintf("/tmp/%s.pcap", containerID)
-	ctx := context.Background()
+	ctx := r.Context()
 
 	execConfig := container.ExecOptions{
 		Cmd:    []string{"sh", "-c", fmt.Sprintf("tcpdump -w %s", filename)},
@@ -1196,7 +1191,7 @@ func tcpdumpStopHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filename := fmt.Sprintf("/tmp/%s.pcap", containerID)
-	ctx := context.Background()
+	ctx := r.Context()
 
 	// Best‑effort stop of tcpdump
 	killExecConfig := container.ExecOptions{
@@ -1282,6 +1277,7 @@ func enableCors(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 
 		if r.Method == "OPTIONS" {
+			w.Header().Set("Access-Control-Max-Age", "3600")
 			return
 		}
 
@@ -1306,13 +1302,17 @@ func cleanup() {
 
 	for _, containerID := range runningContainers {
 		fmt.Printf("Attempting to stop and remove container %s...\n", containerID)
-		timeout := 0
+
+		timeout := 1
+
 		if err := DockerClient.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
 			fmt.Printf("Error stopping container %s: %v\n", containerID, err)
 		}
+
 		if err := DockerClient.ContainerRemove(context.Background(), containerID, container.RemoveOptions{}); err != nil {
 			fmt.Printf("Error removing container %s: %v\n", containerID, err)
 		}
+
 		closeContainerConn(containerID) // Ensure connections are closed
 	}
 	runningContainers = nil
@@ -1431,6 +1431,15 @@ func main() {
 
 	handler := enableCors(mux)
 
+	srv := &http.Server{
+		Addr:              ":8080",
+		Handler:           handler,
+		ReadTimeout:       5 * time.Second,
+		WriteTimeout:      7 * time.Second,
+		ReadHeaderTimeout: 3 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGTERM, os.Interrupt)
 
@@ -1441,5 +1450,5 @@ func main() {
 	}()
 
 	fmt.Println("Starting server on port 8080...")
-	log.Fatal(http.ListenAndServe(":8080", handler))
+	log.Fatal(srv.ListenAndServe())
 }
