@@ -6,7 +6,7 @@ import { PeerIdStr } from '@chainsafe/libp2p-gossipsub/types'
 import { GossipSub } from '@chainsafe/libp2p-gossipsub'
 import { fromString } from 'uint8arrays'
 import { toString } from 'uint8arrays'
-import { multiaddr } from '@multiformats/multiaddr'
+import { Multiaddr, multiaddr } from '@multiformats/multiaddr'
 import { SingleKadDHT } from '@libp2p/kad-dht'
 
 interface Stream {
@@ -272,14 +272,20 @@ export class StatusServer {
           case 'connect': {
             console.log('connect msg', newMessage)
             try {
-              const ma = multiaddr(newMessage.message)
-              console.log('dialing', ma)
+              let maa: Multiaddr[] = []
+
+              newMessage.message.split(',').forEach((m: string) => {
+                maa.push(multiaddr(m))
+              })
+
+              console.log('dialing', maa)
               const start = process.hrtime()
-              await self.server.dial(ma, { signal: AbortSignal.timeout(10_000) })
+              const dRes = await self.server.dial(maa, { signal: AbortSignal.timeout(10_000) })
+
               if (self.perfBytes && self.server.services.perf) {
                 try {
                   for await (const output of self.server.services.perf.measurePerformance(
-                    ma,
+                    dRes.remoteAddr,
                     self.perfBytes,
                     self.perfBytes,
                     { reuseExistingConnection: true },
@@ -292,7 +298,7 @@ export class StatusServer {
               }
               const [seconds, nanoseconds] = process.hrtime(start)
               self.connectTime = seconds * 1000 + nanoseconds / 1e6
-              console.log('dialed', ma)
+              console.log('dialed', dRes.remoteAddr.toString())
             } catch (e) {
               console.log(e)
             }

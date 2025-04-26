@@ -969,8 +969,8 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 // connectHandler sends a message to a container to connect to another host
 func connectHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
-		ContainerID string `json:"containerId"`
-		ToMultiaddr string `json:"toMultiaddr"`
+		ContainerID  string `json:"containerId"`
+		ToMultiaddrs string `json:"toMultiaddrs"` // comma separated string
 	}
 
 	var reqBody RequestBody
@@ -1005,7 +1005,7 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 
 	message := &ContainerWSReq{
 		MType:   "connect",
-		Message: reqBody.ToMultiaddr,
+		Message: reqBody.ToMultiaddrs,
 	}
 
 	msg, err := json.Marshal(message)

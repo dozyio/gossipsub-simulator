@@ -616,19 +616,29 @@ export default function Home() {
     await connectTo(srcContainerId, firstNonLoopback)
   }
 
-  const connectTo = async (srcContainerId: string, toMultiaddr: string): Promise<void> => {
+  const connectTo = async (srcContainerId: string, toMultiaddrs: string | string[]): Promise<void> => {
     if (containers.length === 0) {
       return
     }
 
     interface Body {
       containerId: string
-      toMultiaddr: string
+      toMultiaddrs: string
+    }
+
+    let toMa: string
+    if (typeof toMultiaddrs === 'string') {
+      toMa = toMultiaddrs
+    } else if (Array.isArray(toMultiaddrs)) {
+      toMa = toMultiaddrs.join(',')
+    } else {
+      console.error('Invalid toMultiaddrs type:', typeof toMultiaddrs)
+      return
     }
 
     const body: Body = {
       containerId: srcContainerId,
-      toMultiaddr,
+      toMultiaddrs: toMa,
     }
 
     try {
@@ -774,7 +784,8 @@ export default function Home() {
 
   const handleRemotePeerClick = async (peerId: string): Promise<void> => {
     if (clickType === 'connectTo') {
-      await connectTo(selectedContainer, `${remotePeerData[peerId].multiaddrs[1]}/p2p/${peerId}`)
+      const ma = remotePeerData[peerId].multiaddrs.map((m: string) => `${m}/p2p/${peerId}`)
+      await connectTo(selectedContainer, ma)
       setClickType('connect')
     }
 
