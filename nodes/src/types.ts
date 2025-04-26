@@ -9,6 +9,6 @@ export type Libp2pType = Libp2p<{
   identify: Identify
   ping: PingService
   pubsub: PubSub<GossipsubEvents>
-  lanDHT: KadDHT
+  dht: KadDHT
   perf: Perf
 }>

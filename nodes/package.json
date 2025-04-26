@@ -26,7 +26,9 @@
     "@libp2p/plaintext": "^2.0.22",
     "@libp2p/pubsub-peer-discovery": "^11.0.0",
     "@libp2p/tcp": "^10.0.13",
+    "@libp2p/webrtc": "^5.2.12",
     "@libp2p/websockets": "^9.0.13",
+    "@libp2p/webtransport": "^5.0.40",
     "libp2p": "^2.3.1",
     "uint8arrays": "^5.1.0",
     "ws": "^8.18.0"

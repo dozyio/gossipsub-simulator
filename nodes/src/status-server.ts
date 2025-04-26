@@ -399,12 +399,14 @@ export class StatusServer {
   }
 
   private getDHTPeerList = (): KadPeer[] => {
-    if (!this.server.services.lanDHT) {
+    if (!this.server.services.dht) {
       return []
     }
 
     // @ts-ignore-next-line
-    return [...(this.server.services.lanDHT as SingleKadDHT).routingTable.kb.toIterable()]
+    //console.log('DHT peers', ...(this.server.services.dht as SingleKadDHT).routingTable.kb.toIterable())
+    // @ts-ignore-next-line
+    return [...(this.server.services.dht as SingleKadDHT).routingTable.kb.toIterable()]
   }
 
   private deltaUpdate = async (): Promise<Update> => {

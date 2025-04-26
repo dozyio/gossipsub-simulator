@@ -6,11 +6,15 @@ import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 import { identify } from '@libp2p/identify'
 import { tcp } from '@libp2p/tcp'
+import { webSockets } from '@libp2p/websockets'
+import * as filters from '@libp2p/websockets/filters'
+import { webTransport } from '@libp2p/webtransport'
+import { webRTC, webRTCDirect } from '@libp2p/webrtc'
 import { Libp2pOptions, createLibp2p } from 'libp2p'
 import { applicationScore, generateKeyPair, removePublicAddressesLoopbackAddressesMapper } from './helpers.js'
 import { ping } from '@libp2p/ping'
 import { multiaddr } from '@multiformats/multiaddr'
-import { kadDHT } from '@libp2p/kad-dht'
+import { kadDHT, removePrivateAddressesMapper } from '@libp2p/kad-dht'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { StatusServer } from './status-server.js'
 import {
@@ -59,9 +63,14 @@ import { plaintext } from '@libp2p/plaintext'
       console.log('TOPICS env not set')
     }
 
-    let dhtPrefix = 'local'
+    let dhtPrefix = '/local/lan'
     if (process.env.DHTPREFIX !== undefined) {
       dhtPrefix = process.env.DHTPREFIX
+    }
+
+    let dhtPeerMapper = removePublicAddressesLoopbackAddressesMapper
+    if (process.env.DHTPUBLIC !== undefined) {
+      dhtPeerMapper = removePrivateAddressesMapper
     }
 
     // Recommend setting D settings to 0 for bootstrapper
@@ -194,29 +203,33 @@ import { plaintext } from '@libp2p/plaintext'
         listen: [`/ip4/0.0.0.0/tcp/${port}`],
       },
       transports: [
-        tcp({
-          maxConnections: 500,
-          backlog: 30,
+        tcp(),
+        webSockets({
+          filter: filters.all,
         }),
+        webTransport(),
+        // webRTC(),
+        webRTCDirect(),
       ],
       // connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
       // peerDiscovery: [
       //   pubsubPeerDiscovery()
       // ],
-      connectionManager: {
-        maxConnections: 500,
-        maxIncomingPendingConnections: 30,
-      },
+      // connectionManager: {
+      //   maxConnections: 500,
+      //   maxIncomingPendingConnections: 30,
+      // },
       services: {
         identify: identify(),
         ping: ping(),
         perf: perf(),
         pubsub: gossipsub(gossipsubConfig),
-        lanDHT: kadDHT({
-          protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
+        dht: kadDHT({
+          protocol: `${dhtPrefix}/kad/1.0.0`,
           clientMode: false,
-          peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
+          // peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
+          peerInfoMapper: dhtPeerMapper,
           // allowQueryWithZeroPeers: true,
           // initialQuerySelfInterval: 0,
           // networkDialTimeout: {
@@ -236,7 +249,7 @@ import { plaintext } from '@libp2p/plaintext'
     const server: Libp2pType = (await createLibp2p(libp2pConfig)) as Libp2pType
 
     // Set DHT mode
-    await server.services.lanDHT.setMode('server')
+    await server.services.dht.setMode('server')
 
     // Subscribe to topic
     for (let i = 0; i < topics.length; i++) {

@@ -87,6 +87,7 @@ type ControllerStatus = 'offline' | 'online' | 'connecting'
 const ENDPOINT = 'http://localhost:8080'
 const WS_ENDPOINT = 'ws://localhost:8080/ws'
 const DEBUG_STRING = 'DEBUG=*,*:trace,-*libp2p:peer-store:trace'
+const DHT_PREFIX = '/ipfs/lan'
 
 // Container dimensions
 const CONTAINER_WIDTH = 800
@@ -95,12 +96,12 @@ const CONTAINER_HEIGHT = 800
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 100_000, // Adjusted for CSE
+  repulsion: 1_000, // Adjusted for CSE
   attraction: 0.2, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
   damping: 0.1, // Velocity damping factor
-  maxVelocity: 80, // Maximum velocity cap
+  maxVelocity: 40, // Maximum velocity cap
   naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
 }
 
@@ -142,6 +143,9 @@ export default function Home() {
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev')
   const [debugContainer, setDebugContainer] = useState<boolean>(false)
   const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING)
+  const [dhtPrefix, setDhtPrefix] = useState<string>(DHT_PREFIX)
+  const [dhtAllowPublic, setDhtAllowPublic] = useState<boolean>(false)
+  const [dhtAllowPrivate, setDhtAllowPrivate] = useState<boolean>(true)
   const [hasGossipDSettings, setHasGossipDSettings] = useState<boolean>(false)
   const [gossipD, setGossipD] = useState<string>('8')
   const [gossipDlo, setGossipDlo] = useState<string>('6')
@@ -251,6 +255,16 @@ export default function Home() {
 
   const envSetter = (env: string[] = [], isBootstrap: boolean = false): string[] => {
     env.push(`TOPICS=${topicsName}`)
+
+    env.push(`DHTPREFIX=${dhtPrefix}`)
+
+    if (dhtAllowPublic) {
+      env.push('DHTPUBLIC=true')
+    }
+
+    // if (dhtAllowPrivate) {
+    //   env.push('DHTPRIVATE=true')
+    // }
 
     if (debugContainer) {
       env.push(debugStr)
@@ -1497,6 +1511,38 @@ export default function Home() {
               <span style={{ marginLeft: '5px' }}>Disable Noise</span>
             </label>
           </div>
+          <div className='input-group'>
+            <label>
+              DHT Prefix: *prefix*/kad/1.0.0
+              <input type='text' value={dhtPrefix} onChange={(e) => setDhtPrefix(e.target.value)} />
+            </label>
+          </div>
+          <div className='input-group'>
+            <label>
+              <input
+                type='checkbox'
+                checked={dhtAllowPrivate}
+                onChange={() => {
+                  setDhtAllowPrivate(!dhtAllowPrivate)
+                  setDhtAllowPublic(dhtAllowPrivate)
+                }}
+              />
+              <span style={{ marginLeft: '5px' }}>DHT Allow Private Addr</span>
+            </label>
+          </div>
+          <div className='input-group'>
+            <label>
+              <input
+                type='checkbox'
+                checked={dhtAllowPublic}
+                onChange={() => {
+                  setDhtAllowPublic(!dhtAllowPublic)
+                  setDhtAllowPrivate(dhtAllowPublic)
+                }}
+              />
+              <span style={{ marginLeft: '5px' }}>DHT Allow Public Addr</span>
+            </label>
+          </div>
 
           <h3>Containers</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
@@ -2080,13 +2126,13 @@ export default function Home() {
               <p>Type: {peerData[selectedContainer]?.type}</p>
               <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
               <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
-              {/*<div>
-                {peerData[selectedContainer]?.remotePeers.map((r) => (
-                  <div key={r.peerId} style={{ marginLeft: '1rem' }}>
-                    {r.multiaddrs}
-                  </div>
+              <div>
+                {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
+                  <p key={rpid} style={{ marginLeft: '1rem' }}>
+                    {peerData[selectedContainer].remotePeers[rpid].multiaddrs}
+                  </p>
                 ))}
-              </div>*/}
+              </div>
               <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
@@ -2122,8 +2168,9 @@ export default function Home() {
                   </p>
                 ))}
               </div>
-              <div>Pubsub Peer Store: {peerData[selectedContainer]?.pubsubPeers?.length}</div>
               <div>Libp2p Peer Store: {peerData[selectedContainer]?.libp2pPeers?.length}</div>
+              <div>Pubsub Peer Store: {peerData[selectedContainer]?.pubsubPeers?.length}</div>
+              <div>DHT Peer Store: {peerData[selectedContainer]?.dhtPeers?.length}</div>
               <div>
                 Protocols:{' '}
                 {peerData[selectedContainer]?.protocols?.map((p, index) => (

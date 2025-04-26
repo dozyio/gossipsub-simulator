@@ -5,10 +5,12 @@ import { noise } from '@chainsafe/libp2p-noise'
 import { yamux } from '@chainsafe/libp2p-yamux'
 import { identify } from '@libp2p/identify'
 import { webSockets } from '@libp2p/websockets'
-import { tcp } from '@libp2p/tcp'
 import * as filters from '@libp2p/websockets/filters'
+import { webTransport } from '@libp2p/webtransport'
+import { webRTC, webRTCDirect } from '@libp2p/webrtc'
+import { tcp } from '@libp2p/tcp'
 import { createLibp2p, Libp2pOptions } from 'libp2p'
-import { kadDHT } from '@libp2p/kad-dht'
+import { kadDHT, removePrivateAddressesMapper } from '@libp2p/kad-dht'
 import { ping } from '@libp2p/ping'
 import { applicationScore, removePublicAddressesLoopbackAddressesMapper } from './helpers.js'
 import { Libp2pType } from './types.js'
@@ -51,9 +53,14 @@ import { plaintext } from '@libp2p/plaintext'
       perfBytes = Number(process.env.PERF)
     }
 
-    let dhtPrefix = 'local'
+    let dhtPrefix = '/local/lan'
     if (process.env.DHTPREFIX !== undefined) {
       dhtPrefix = process.env.DHTPREFIX
+    }
+
+    let dhtPeerMapper = removePublicAddressesLoopbackAddressesMapper
+    if (process.env.DHTPUBLIC !== undefined) {
+      dhtPeerMapper = removePrivateAddressesMapper
     }
 
     let D = 8
@@ -87,10 +94,13 @@ import { plaintext } from '@libp2p/plaintext'
         listen: [`/ip4/0.0.0.0/tcp/0`],
       },
       transports: [
-        // webSockets({
-        //   filter: filters.all
-        // }),
         tcp(),
+        webSockets({
+          filter: filters.all,
+        }),
+        webTransport(),
+        // webRTC(),
+        webRTCDirect(),
       ],
       // connectionEncrypters: [noise()],
       streamMuxers: [yamux()],
@@ -101,9 +111,9 @@ import { plaintext } from '@libp2p/plaintext'
       //   // }),
       //   // pubsubPeerDiscovery()
       // ],
-      connectionManager: {
-        maxConnections: 20,
-      },
+      // connectionManager: {
+      //   maxConnections: 50,
+      // },
       services: {
         identify: identify(),
         ping: ping(),
@@ -178,10 +188,10 @@ import { plaintext } from '@libp2p/plaintext'
             opportunisticGraftThreshold: opportunisticGraftScoreThreshold,
           },
         }),
-        lanDHT: kadDHT({
-          protocol: `/${dhtPrefix}/lan/kad/1.0.0`,
-          // clientMode: true,
-          peerInfoMapper: removePublicAddressesLoopbackAddressesMapper,
+        dht: kadDHT({
+          protocol: `${dhtPrefix}/kad/1.0.0`,
+          clientMode: false,
+          peerInfoMapper: dhtPeerMapper,
         }),
       },
     }
