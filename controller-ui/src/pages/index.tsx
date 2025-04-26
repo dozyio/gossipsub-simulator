@@ -2,6 +2,8 @@ import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
 import { FaRegCircle } from 'react-icons/fa'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import * as d3 from 'd3'
+import isEqual from 'lodash.isequal'
 
 interface PortMapping {
   ip: string
@@ -40,10 +42,6 @@ interface RRTs {
 interface RemotePeerData {
   multiaddrs: string[]
   protocols: string[]
-  x?: number
-  y?: number
-  vx?: number // Velocity X
-  vy?: number // Velocity Y
 }
 
 interface RemotePeers {
@@ -72,10 +70,26 @@ interface PeerData {
   peerScores: PeerScores
   rtts: RRTs
   connectTime: number
-  x: number
-  y: number
-  vx: number // Velocity X
-  vy: number // Velocity Y
+}
+
+interface PeerNode {
+  id: string
+  type: 'remotePeer' | 'container'
+}
+
+interface PeerNodeDatum extends d3.SimulationNodeDatum {
+  id: string
+  type: 'remotePeer' | 'container'
+}
+
+interface LinkDatum {
+  source: string
+  target: string
+}
+
+interface PeerLinkDatum extends d3.SimulationLinkDatum<PeerNodeDatum> {
+  source: string | PeerNodeDatum
+  target: string | PeerNodeDatum
 }
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams'
@@ -96,10 +110,10 @@ const CONTAINER_HEIGHT = 800
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 1_000, // Adjusted for CSE
+  repulsion: 100_000, // Adjusted for CSE
   attraction: 0.2, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
-  gravity: 0.05, // Central gravity strength
+  gravity: 0.15, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 40, // Maximum velocity cap
   naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
@@ -174,6 +188,16 @@ export default function Home() {
   const [nodeSize, setNodeSize] = useState<number>(35)
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
 
+  // new graph stuff
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [nodes, setNodes] = useState<PeerNode[]>([])
+  const [links, setLinks] = useState<LinkDatum[]>([])
+  const simulationRef = useRef<d3.Simulation<PeerNodeDatum, LinkDatum> | null>(null)
+  // const linkSelRef = useRef<d3.Selection<SVGLineElement, LinkDatum, SVGGElement, unknown> | null>(null)
+  // const nodeSelRef = useRef<d3.Selection<SVGCircleElement, PeerNodeDatum, SVGGElement, unknown> | null>(null)
+  const simNodes = useRef<PeerNodeDatum[]>([])
+  const simLinks = useRef<PeerLinkDatum[]>([])
+
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectTimeout = useRef<number | null>(null)
@@ -189,7 +213,7 @@ export default function Home() {
           newData[container.id] = prevData[container.id]
         } else {
           // Initialize data for new containers
-          const { x, y } = getRandomPosition()
+          // const { x, y } = getRandomPosition()
           newData[container.id] = {
             containerId: container.id,
             id: container.id,
@@ -212,10 +236,6 @@ export default function Home() {
             peerScores: {},
             rtts: {},
             connectTime: -1,
-            x,
-            y,
-            vx: 0,
-            vy: 0,
           }
         }
       })
@@ -866,19 +886,19 @@ export default function Home() {
     return '50%'
   }
 
-  // Utility function to generate random positions within the container
-  const getRandomPosition = () => ({
-    x: Math.random() * (CONTAINER_WIDTH - nodeSize) + nodeSize / 2,
-    y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
-  })
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
-    if (prevConnections.length !== newConnections.length) return false
-    return prevConnections.every(
-      (conn, index) => conn.from === newConnections[index].from && conn.to === newConnections[index].to,
-    )
-  }
+  // // Utility function to generate random positions within the container
+  // const getRandomPosition = () => ({
+  //   x: Math.random() * (CONTAINER_WIDTH - nodeSize) + nodeSize / 2,
+  //   y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
+  // })
+  //
+  // // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  // const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
+  //   if (prevConnections.length !== newConnections.length) return false
+  //   return prevConnections.every(
+  //     (conn, index) => conn.from === newConnections[index].from && conn.to === newConnections[index].to,
+  //   )
+  // }
 
   // Function to handle WebSocket messages and update containerData
   const handleNodeStatusUpdate = (data: PeerData) => {
@@ -931,13 +951,8 @@ export default function Home() {
               }
             } else {
               // new remote peer
-              const { x, y } = getRandomPosition()
               merged[remotePeerId] = {
                 ...remotePeerDetails,
-                x,
-                y,
-                vx: 0,
-                vy: 0,
               }
             }
           }
@@ -1004,21 +1019,95 @@ export default function Home() {
     return Object.values(peerData).some((pd) => pd.remotePeers.hasOwnProperty(remotePeerId))
   }
 
-  const allNodes = useMemo(() => {
-    const nodes: Record<string, { x: number; y: number; vx: number; vy: number }> = {}
-
-    Object.values(peerData).forEach((p) => {
-      nodes[p.containerId] = { x: p.x, y: p.y, vx: p.vx, vy: p.vy }
-    })
-
+  const allNodes = (): PeerNode[] => {
+    const out: PeerNode[] = []
+    Object.values(peerData).forEach((p) => out.push({ id: p.peerId, type: 'container' }))
     Object.entries(remotePeerData).forEach(([id, r]) => {
       if (!isPeerIdAssignedToContainer(id)) {
-        nodes[id] = { x: r.x || 0, y: r.y || 0, vx: r.vx || 0, vy: r.vy || 0 }
+        out.push({ id, type: 'remotePeer' })
       }
     })
+    return out
+  }
 
-    return nodes
-  }, [peerData, remotePeerData])
+  const allLinks = (): LinkDatum[] => {
+    const links: LinkDatum[] = []
+
+    // Build edges based on selected mapType
+    Object.entries(peerData).forEach(([containerId, data]) => {
+      let connectionList: string[] = []
+      switch (mapType) {
+        case 'streams':
+          connectionList = data.streams ? Object.keys(data.streams) : []
+          break
+        case 'subscribers':
+          connectionList = data.subscribersList?.[selectedTopic] ?? []
+          break
+        case 'meshPeers':
+          connectionList = data.meshPeersList?.[selectedTopic] ?? []
+          break
+        default:
+          // connections, pubsubPeers, libp2pPeers, dhtPeers
+
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (Array.isArray((data as any)[mapType])) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            connectionList = (data as any)[mapType] as string[]
+          }
+          break
+      }
+
+      // // 1) container → container
+      // connectionList.forEach((peerId) => {
+      //   const targetContainerId = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
+      //   if (targetContainerId) {
+      //     links.push({ source: peerId, target: peerData[targetContainerId].peerId })
+      //   }
+      // })
+      connectionList.forEach((peerId) => {
+        // “peerId” here is the peer we’re connected to; find which container “owns” it
+        const targetContainerId = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
+        if (targetContainerId) {
+          // THIS container’s peerId should be the source
+          const sourcePeerId = peerData[containerId].peerId
+          const targetPeerId = peerData[targetContainerId].peerId
+          links.push({ source: sourcePeerId, target: targetPeerId })
+        }
+      })
+
+      // 2) container → remote via remotePeers if not assigned to a container
+      Object.keys(data.remotePeers || {}).forEach((remotePeerId) => {
+        if (!isPeerIdAssignedToContainer(remotePeerId)) {
+          links.push({ source: peerData[containerId].peerId, target: remotePeerId })
+          // newEdges.push({ from: containerId, to: remotePeerId })
+        }
+      })
+    })
+
+    // TODO
+    // // 3) orphans via remotePeerData links
+    // Object.keys(remotePeerData).forEach((remotePeerId) => {
+    //   if (!isPeerIdAssignedToContainer(remotePeerId)) {
+    //     Object.entries(peerData).forEach(([containerId, data]) => {
+    //       if (data.remotePeers?.[remotePeerId]) {
+    //         newEdges.push({ from: containerId, to: remotePeerId })
+    //       }
+    //     })
+    //   }
+    // })
+
+    // dedupe on unordered pairs
+    const uniq = links.filter(
+      (e, i) =>
+        links.findIndex(
+          (f) => (f.source === e.source && f.target === e.target) || (f.source === e.target && f.target === e.source),
+        ) === i,
+    )
+
+    // console.log('allLinks:', uniq)
+
+    return uniq
+  }
 
   // WebSocket for controller
   // Receives containers list and node updates
@@ -1097,265 +1186,28 @@ export default function Home() {
     }
   }, [])
 
-  // Edge generation
   useEffect(() => {
-    const newEdges: { from: string; to: string }[] = []
+    const n = allNodes()
 
-    // Build edges based on selected mapType
-    Object.entries(peerData).forEach(([containerId, data]) => {
-      let connectionList: string[] = []
-      switch (mapType) {
-        case 'streams':
-          connectionList = data.streams ? Object.keys(data.streams) : []
-          break
-        case 'subscribers':
-          connectionList = data.subscribersList?.[selectedTopic] ?? []
-          break
-        case 'meshPeers':
-          connectionList = data.meshPeersList?.[selectedTopic] ?? []
-          break
-        default:
-          // connections, pubsubPeers, libp2pPeers, dhtPeers
-
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          if (Array.isArray((data as any)[mapType])) {
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            connectionList = (data as any)[mapType] as string[]
-          }
-          break
+    setNodes((prev) => {
+      if (isEqual(prev, n)) {
+        console.log('nodes unchanged')
+        return prev
       }
-
-      // 1) container → container
-      connectionList.forEach((peerId) => {
-        const targetCid = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
-        if (targetCid) {
-          newEdges.push({ from: containerId, to: targetCid })
-        }
-      })
-
-      // 2) container → remote via remotePeers if not assigned to a container
-      Object.keys(data.remotePeers || {}).forEach((remotePeerId) => {
-        if (!isPeerIdAssignedToContainer(remotePeerId)) {
-          newEdges.push({ from: containerId, to: remotePeerId })
-        }
-      })
+      console.log('allNodes updated', nodes, n)
+      return n
     })
 
-    // 3) orphans via  remotePeerData links
-    Object.keys(remotePeerData).forEach((remotePeerId) => {
-      if (!isPeerIdAssignedToContainer(remotePeerId)) {
-        Object.entries(peerData).forEach(([containerId, data]) => {
-          if (data.remotePeers?.[remotePeerId]) {
-            newEdges.push({ from: containerId, to: remotePeerId })
-          }
-        })
+    const l = allLinks()
+    setLinks((prev) => {
+      if (isEqual(prev, l)) {
+        console.log('links unchanged')
+        return prev
       }
+      console.log('allLinks updated', links, l)
+      return l
     })
-
-    // dedupe on unordered pairs
-    const uniq = newEdges.filter(
-      (e, i) =>
-        newEdges.findIndex((f) => (f.from === e.from && f.to === e.to) || (f.from === e.to && f.to === e.from)) === i,
-    )
-
-    if (
-      uniq.length !== prevEdgesRef.current.length ||
-      !uniq.every((e, i) => e.from === prevEdgesRef.current[i]?.from && e.to === prevEdgesRef.current[i]?.to)
-    ) {
-      prevEdgesRef.current = uniq
-      setEdges(uniq)
-      console.log('Updated edges:', uniq)
-    }
-  }, [peerData, remotePeerData, mapType, selectedTopic])
-
-  // // Update node size based on number of containers
-  // useEffect(() => {
-  //   const minSize = 35 // Minimum node size
-  //   const maxSize = 45 // Maximum node size
-  //   const scalingFactor = 5 // Adjust this to control sensitivity
-  //
-  //   if (containers.length === 0) {
-  //     setNodeSize(maxSize) // Default size when no containers
-  //     return
-  //   }
-  //
-  //   // Dynamically scale the node size
-  //   const size = Math.max(minSize, Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor))
-  //
-  //   setNodeSize(size)
-  // }, [containers])
-
-  // Update min distance
-  // useEffect(() => {
-  //   const minDistanceMin = nodeSize * 2 // Minimum allowable distance
-  //   const minDistanceMax = nodeSize * 4 // Maximum allowable distance
-  //   const scalingFactor = 1 // Adjust for sensitivity
-  //
-  //   if (containers.length === 0) {
-  //     setMinDistance(minDistanceMax) // Default when no containers
-  //     return
-  //   }
-  //
-  //   // Dynamically scale the minDistance
-  //   const distance = Math.max(
-  //     minDistanceMin,
-  //     Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
-  //   )
-  //
-  //   setMinDistance(distance)
-  // }, [containers, nodeSize])
-
-  // Compound Spring Embedder Force-Directed Layout Implementation
-  useEffect(() => {
-    if (mapView !== 'graph') return
-
-    const centerX = CONTAINER_WIDTH / 2
-    const centerY = CONTAINER_HEIGHT / 2
-    const VELOCITY_THRESHOLD = 1
-    const STABLE_ITERATIONS = 20
-    const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
-
-    const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-    if (edgesChanged) {
-      stableCountRef.current = 0
-      unstableCountRef.current = 0
-
-      stabilizedRef.current = false
-      prevEdgesRef.current = edges
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-    }
-
-    intervalIdRef.current = window.setInterval(() => {
-      if (stabilizedRef.current && intervalIdRef.current) {
-        window.clearInterval(intervalIdRef.current)
-        return
-      }
-
-      let allStable = true
-      // Clone positions & velocities
-      const updated = { ...allNodes }
-
-      // Compute forces for each nodeId in allNodes
-      Object.entries(updated).forEach(([id, node]) => {
-        let fx = 0
-        let fy = 0
-        // stability
-        if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-          // console.log('id unstable', id)
-          allStable = false
-          stableCountRef.current = 0
-        }
-
-        // 1. Repulsion among all nodes
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1
-          dist = Math.max(dist, nodeSize)
-          const rep = mapTypeForces[mapType].repulsion / (dist * dist)
-          fx += (dx / dist) * rep
-          fy += (dy / dist) * rep
-        })
-
-        // 2. Attraction along edges
-        edges.forEach((e) => {
-          if (e.from === id || e.to === id) {
-            const otherId = e.from === id ? e.to : e.from
-            const other = updated[otherId]
-            if (!other) return
-            const dx = other.x - node.x
-            const dy = other.y - node.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
-            const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-            fx += (dx / dist) * attr
-            fy += (dy / dist) * attr
-          }
-        })
-
-        // 3. Central gravity
-        fx += (centerX - node.x) * mapTypeForces[mapType].gravity
-        fy += (centerY - node.y) * mapTypeForces[mapType].gravity
-
-        // 4. Collision
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          if (dist < minDistance) {
-            const overlap = minDistance - dist
-            const col = (overlap / dist) * mapTypeForces[mapType].collision
-            fx += (dx / dist) * col
-            fy += (dy / dist) * col
-          }
-        })
-
-        // 5. Damping
-        node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-        node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-
-        // 6. Cap velocity
-        node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-        node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-
-        // 7. Update pos
-        node.x += node.vx
-        node.y += node.vy
-
-        // 8. Boundaries
-        node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-        node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-      })
-
-      // Separate updates back to states
-      // Containers
-      setPeerData((prev) => {
-        const next = { ...prev }
-        Object.entries(prev).forEach(([cid]) => {
-          const u = updated[cid]
-          if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-        })
-        return next
-      })
-
-      // Remotes
-      setRemotePeerData((prev) => {
-        const next: RemotePeers = { ...prev }
-        Object.keys(prev).forEach((rid) => {
-          if (isRemotePeerConnectedToContainer(rid)) {
-            const u = updated[rid]
-            if (u) {
-              next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-            }
-          }
-        })
-        return next
-      })
-
-      // stability
-      if (allStable) {
-        stableCountRef.current += 1
-        if (stableCountRef.current >= STABLE_ITERATIONS) {
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
-      } else {
-        stableCountRef.current = 0
-        unstableCountRef.current += 1
-        if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
-          stableCountRef.current = STABLE_ITERATIONS
-          allStable = true
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
-      }
-    }, 30)
-
-    return () => {
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-    }
-  }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
+  }, [peerData, remotePeerData, mapType, selectedTopic, selectedProtocols])
 
   // Auto publish if enabled
   useEffect(() => {
@@ -1367,6 +1219,309 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [autoPublish, containers])
 
+  // 5) Initialize the D3 simulation ONCE
+  useEffect(() => {
+    const width = 600
+    const height = 600
+    if (!svgRef.current) return
+
+    const svg = d3
+      .select(svgRef.current)
+      .attr('viewBox', `0 0 ${width} ${height}`)
+      .style('max-width', '100%')
+      .style('height', 'auto')
+
+    // groups for links & nodes
+    svg.append('g').attr('class', 'links')
+    svg.append('g').attr('class', 'nodes')
+
+    // create an empty sim and store it
+    const sim = d3
+      .forceSimulation<PeerNodeDatum>()
+      .force(
+        'link',
+        d3.forceLink<PeerNodeDatum, PeerLinkDatum>().id((d) => d.id),
+      )
+      .force('charge', d3.forceManyBody())
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .on('tick', () => {
+        svg
+          .select<SVGGElement>('g.links')
+          .selectAll('line')
+          .attr('x1', (d) => (d.source as PeerNodeDatum).x!)
+          .attr('y1', (d) => (d.source as PeerNodeDatum).y!)
+          .attr('x2', (d) => (d.target as PeerNodeDatum).x!)
+          .attr('y2', (d) => (d.target as PeerNodeDatum).y!)
+
+        svg
+          .select<SVGGElement>('g.nodes')
+          .selectAll('circle')
+          .attr('cx', (d) => d.x!)
+          .attr('cy', (d) => d.y!)
+      })
+
+    simulationRef.current = sim
+    return () => {
+      sim.stop()
+    }
+  }, [])
+
+  useEffect(() => {
+    const sim = simulationRef.current
+    const svgEl = svgRef.current
+    if (!sim || !svgEl) return
+
+    // 1) Prepare D3 data
+    const d3Nodes = nodes.map((d) => ({ id: d.id, type: d.type }))
+    const d3Links = links.map((d) => ({ source: d.source, target: d.target }))
+
+    // 2) Update simulation internals
+    sim.nodes(d3Nodes)
+    ;(sim.force('link') as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>).links(d3Links)
+
+    const svg = d3.select(svgEl)
+
+    // 3) Data‐join for links
+    svg
+      .select<SVGGElement>('g.links')
+      .selectAll<SVGLineElement, PeerLinkDatum>('line')
+      .data(d3Links, (d) => {
+        const s = typeof d.source === 'string' ? d.source : d.source.id
+        const t = typeof d.target === 'string' ? d.target : d.target.id
+        return `${s}→${t}`
+      })
+      .join(
+        (enter) => enter.append('line').attr('stroke', '#999').attr('stroke-opacity', 0.6).attr('stroke-width', 2),
+        (update) => update,
+        (exit) => exit.remove(),
+      )
+
+    // 4) Data‐join for nodes
+    svg
+      .select<SVGGElement>('g.nodes')
+      .selectAll<SVGCircleElement, PeerNodeDatum>('circle')
+      .data(d3Nodes, (d) => d.id)
+      .join(
+        (enter) =>
+          enter
+            .append('circle')
+            .attr('r', 5)
+            .attr('fill', (d) => (d.type === 'container' ? 'orange' : 'steelblue'))
+            .call(
+              d3
+                .drag<SVGCircleElement, PeerNodeDatum>()
+                .on('start', (e) => {
+                  if (!e.active) sim.alphaTarget(0.3).restart()
+                  e.subject.fx = e.subject.x
+                  e.subject.fy = e.subject.y
+                })
+                .on('drag', (e) => {
+                  e.subject.fx = e.x
+                  e.subject.fy = e.y
+                })
+                .on('end', (e) => {
+                  if (!e.active) sim.alphaTarget(0)
+                  e.subject.fx = null
+                  e.subject.fy = null
+                }),
+            )
+            .append('title')
+            .text((d) => d.id),
+        (update) => update,
+        (exit) => exit.remove(),
+      )
+
+    // 5) Restart sim
+    sim.alpha(1).restart()
+  }, [nodes, links])
+
+  // 6) Whenever your React nodes/links update, feed them into D3
+  // useEffect(() => {
+  //   const sim = simulationRef.current
+  //   const svgEl = svgRef.current
+  //   if (!sim || !svgEl) return
+  //
+  //   // 1) Prepare D3 data arrays
+  //   const d3Nodes: PeerNodeDatum[] = nodes.map((d) => ({ id: d.id, type: d.type }))
+  //   const d3Links: PeerLinkDatum[] = links.map((d) => ({
+  //     source: d.source,
+  //     target: d.target,
+  //   }))
+  //
+  //   // 2) Push into simulation
+  //   sim.nodes(d3Nodes)
+  //   const linkForce = sim.force('link') as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>
+  //   linkForce.links(d3Links)
+  //
+  //   const svg = d3.select(svgEl)
+  //
+  //   // 3) DATA JOIN for links
+  //   svg
+  //     .select<SVGGElement>('g.links')
+  //     .selectAll<SVGLineElement, PeerLinkDatum>('line')
+  //     .data(d3Links, (d) => {
+  //       const s = typeof d.source === 'string' ? d.source : d.source.id
+  //       const t = typeof d.target === 'string' ? d.target : d.target.id
+  //       return `${s}→${t}`
+  //     })
+  //     .join(
+  //       (enter) => enter.append('line').attr('stroke', '#999').attr('stroke-opacity', 0.6).attr('stroke-width', 2),
+  //       (update) => update,
+  //       (exit) => exit.remove(),
+  //     )
+  //
+  //   // 4) DATA JOIN for nodes
+  //   svg
+  //     .select<SVGGElement>('g.nodes')
+  //     .selectAll<SVGCircleElement, PeerNodeDatum>('circle')
+  //     .data(d3Nodes, (d) => d.id)
+  //     .join(
+  //       (enter) =>
+  //         enter
+  //           .append('circle')
+  //           .attr('r', 5)
+  //           .attr('fill', (d) => (d.type === 'container' ? 'orange' : 'steelblue'))
+  //           .call(
+  //             d3
+  //               .drag<SVGCircleElement, PeerNodeDatum>()
+  //               .on('start', (e) => {
+  //                 if (!e.active) sim.alphaTarget(0.3).restart()
+  //                 e.subject.fx = e.subject.x
+  //                 e.subject.fy = e.subject.y
+  //               })
+  //               .on('drag', (e) => {
+  //                 e.subject.fx = e.x
+  //                 e.subject.fy = e.y
+  //               })
+  //               .on('end', (e) => {
+  //                 if (!e.active) sim.alphaTarget(0)
+  //                 e.subject.fx = null
+  //                 e.subject.fy = null
+  //               }),
+  //           )
+  //           .append('title')
+  //           .text((d) => d.id),
+  //       (update) => update,
+  //       (exit) => exit.remove(),
+  //     )
+  //
+  //   // 5) Restart the simulation “clock”
+  //   sim.alpha(1).restart()
+  // }, [nodes, links])
+
+  // useEffect(() => {
+  //   const sim = simulationRef.current
+  //   if (!sim) return
+  //   // whenever your React “nodes” changes, make a fresh copy for the sim
+  //   simNodes.current = nodes.map((d) => ({
+  //     id: d.id,
+  //     type: d.type,
+  //   }))
+  //   simulationRef.current!.nodes(simNodes.current)
+  //   simulationRef.current!.alpha(1).restart()
+  // }, [nodes, links])
+
+  // // init simulation
+  // useEffect(() => {
+  //   const width = 600, height = 600
+  //   if (!svgRef.current) return
+  //
+  //   const svg = d3
+  //     .select(svgRef.current)
+  //     .attr('viewBox', `0 0 ${width} ${height}`)
+  //     .style('max-width', '100%')
+  //     .style('height', 'auto')
+  //
+  //   // groups for links & nodes
+  //   svg.append('g').attr('class', 'links')
+  //   svg.append('g').attr('class', 'nodes')
+  //
+  //   // create an empty sim and store it
+  //   const sim = d3
+  //     .forceSimulation<PeerNodeDatum>()
+  //     .force('link', d3.forceLink<PeerNodeDatum,LinkDatum>().id(d => d.id))
+  //     .force('charge', d3.forceManyBody())
+  //     .force('center', d3.forceCenter(width / 2, height / 2))
+  //     .on('tick', () => {
+  //       const linkSel = svg.select<SVGGElement>('g.links').selectAll('line')
+  //       const nodeSel = svg.select<SVGGElement>('g.nodes').selectAll('circle')
+  //
+  //       linkSel
+  //         .attr('x1', d => (d.source as PeerNodeDatum).x!)
+  //         .attr('y1', d => (d.source as PeerNodeDatum).y!)
+  //         .attr('x2', d => (d.target as PeerNodeDatum).x!)
+  //         .attr('y2', d => (d.target as PeerNodeDatum).y!)
+  //
+  //       nodeSel
+  //         .attr('cx', d => d.x!)
+  //         .attr('cy', d => d.y!)
+  //     })
+  //
+  //   simulationRef.current = sim
+  //   return () => sim.stop()
+  // }, [])
+  //
+  // useEffect(() => {
+  //   const sim = simulationRef.current!
+  //   const color = d3.scaleOrdinal(d3.schemeCategory10)
+  //
+  //   // update the simulation’s internal data
+  //   sim.nodes(nodes)
+  //   ;(sim.force('link') as d3.ForceLink<PeerNodeDatum, LinkDatum>).links(links)
+  //
+  //   // DATA JOIN for links
+  //   const linkSel = linkSelRef.current!.data(links, (d: any) => d.source + '–' + d.target)
+  //
+  //   linkSel.exit().remove()
+  //
+  //   linkSelRef.current = linkSel
+  //     .enter()
+  //     .append('line')
+  //     .attr('stroke', '#999')
+  //     .attr('stroke-opacity', 0.6)
+  //     .attr('stroke-width', (d) => Math.sqrt(d.value))
+  //     .merge(linkSel as any)
+  //
+  //   // DATA JOIN for nodes
+  //   const nodeSel = nodeSelRef.current!.data(nodes, (d) => d.id)
+  //
+  //   nodeSel.exit().remove()
+  //
+  //   const nodeEnter = (nodeSel as any)
+  //     .enter()
+  //     .append('circle')
+  //     .attr('r', 5)
+  //     .attr('stroke', '#fff')
+  //     .attr('stroke-width', 1.5)
+  //     .attr('fill', (d) => color(d.group))
+  //     .call(
+  //       d3
+  //         .drag<SVGCircleElement, PeerNodeDatum>()
+  //         .on('start', (event) => {
+  //           if (!event.active) sim.alphaTarget(0.3).restart()
+  //           event.subject.fx = event.subject.x
+  //           event.subject.fy = event.subject.y
+  //         })
+  //         .on('drag', (event) => {
+  //           event.subject.fx = event.x
+  //           event.subject.fy = event.y
+  //         })
+  //         .on('end', (event) => {
+  //           if (!event.active) sim.alphaTarget(0)
+  //           event.subject.fx = null
+  //           event.subject.fy = null
+  //         }),
+  //     )
+  //
+  //   nodeEnter.append('title').text((d) => d.id)
+  //
+  //   nodeSelRef.current = (nodeEnter as any).merge(nodeSel as any)
+  //
+  //   // restart the sim so forces re-heat
+  //   sim.alpha(1).restart()
+  // }, [nodes, links])
+
+  // html
   return (
     <>
       <Head>
@@ -1723,8 +1878,8 @@ export default function Home() {
               </div>
             )}
           </div>
-          <div className='graph'>
-            {mapView === 'graph' && (
+          {/* <<div className='graph'>
+            {{mapView === 'graph' && (
               <div>
                 <svg className='edges'>
                   {edges.map((conn, index) => {
@@ -2028,7 +2183,8 @@ export default function Home() {
                 })}
               </div>
             )}
-          </div>
+          </div>*/}
+          <svg ref={svgRef}></svg>
         </div>
 
         {/* Sidebar 2: Information and Actions */}
@@ -2090,10 +2246,6 @@ export default function Home() {
               <div>
                 Multiaddrs: {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
               </div>
-              <div>x: {remotePeerData[selectedRemotePeer].x}</div>
-              <div>y: {remotePeerData[selectedRemotePeer].y}</div>
-              <div>xv: {remotePeerData[selectedRemotePeer].vx}</div>
-              <div>yv: {remotePeerData[selectedRemotePeer].vy}</div>
             </div>
           )}
           {selectedContainer && peerData[selectedContainer] && (
@@ -2186,6 +2338,7 @@ export default function Home() {
           )}
         </div>
 
+        {/* css */}
         <style jsx>{`
           .app-container {
             display: flex;
