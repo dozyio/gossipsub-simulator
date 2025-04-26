@@ -190,6 +190,7 @@ export default function Home() {
 
   // new graph stuff
   const svgRef = useRef<SVGSVGElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const [nodes, setNodes] = useState<PeerNode[]>([])
   const [links, setLinks] = useState<LinkDatum[]>([])
   const simulationRef = useRef<d3.Simulation<PeerNodeDatum, LinkDatum> | null>(null)
@@ -1219,145 +1220,81 @@ export default function Home() {
     return () => clearInterval(interval)
   }, [autoPublish, containers])
 
-  // 5) Initialize the D3 simulation ONCE
-  useEffect(() => {
-    const width = 600
-    const height = 600
-    if (!svgRef.current) return
-
-    const svg = d3
-      .select(svgRef.current)
-      .attr('viewBox', `0 0 ${width} ${height}`)
-      .style('max-width', '100%')
-      .style('height', 'auto')
-
-    // groups for links & nodes
-    svg.append('g').attr('class', 'links')
-    svg.append('g').attr('class', 'nodes')
-
-    // create an empty sim and store it
-    const sim = d3
-      .forceSimulation<PeerNodeDatum>()
-      .force(
-        'link',
-        d3.forceLink<PeerNodeDatum, PeerLinkDatum>().id((d) => d.id),
-      )
-      .force('charge', d3.forceManyBody())
-      .force('center', d3.forceCenter(width / 2, height / 2))
-      .on('tick', () => {
-        svg
-          .select<SVGGElement>('g.links')
-          .selectAll('line')
-          .attr('x1', (d) => (d.source as PeerNodeDatum).x!)
-          .attr('y1', (d) => (d.source as PeerNodeDatum).y!)
-          .attr('x2', (d) => (d.target as PeerNodeDatum).x!)
-          .attr('y2', (d) => (d.target as PeerNodeDatum).y!)
-
-        svg
-          .select<SVGGElement>('g.nodes')
-          .selectAll('circle')
-          .attr('cx', (d) => d.x!)
-          .attr('cy', (d) => d.y!)
-      })
-
-    simulationRef.current = sim
-    return () => {
-      sim.stop()
-    }
-  }, [])
-
-  useEffect(() => {
-    const sim = simulationRef.current
-    const svgEl = svgRef.current
-    if (!sim || !svgEl) return
-
-    // 1) Prepare D3 data
-    const d3Nodes = nodes.map((d) => ({ id: d.id, type: d.type }))
-    const d3Links = links.map((d) => ({ source: d.source, target: d.target }))
-
-    // 2) Update simulation internals
-    sim.nodes(d3Nodes)
-    ;(sim.force('link') as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>).links(d3Links)
-
-    const svg = d3.select(svgEl)
-
-    // 3) Data‐join for links
-    svg
-      .select<SVGGElement>('g.links')
-      .selectAll<SVGLineElement, PeerLinkDatum>('line')
-      .data(d3Links, (d) => {
-        const s = typeof d.source === 'string' ? d.source : d.source.id
-        const t = typeof d.target === 'string' ? d.target : d.target.id
-        return `${s}→${t}`
-      })
-      .join(
-        (enter) => enter.append('line').attr('stroke', '#999').attr('stroke-opacity', 0.6).attr('stroke-width', 2),
-        (update) => update,
-        (exit) => exit.remove(),
-      )
-
-    // 4) Data‐join for nodes
-    svg
-      .select<SVGGElement>('g.nodes')
-      .selectAll<SVGCircleElement, PeerNodeDatum>('circle')
-      .data(d3Nodes, (d) => d.id)
-      .join(
-        (enter) =>
-          enter
-            .append('circle')
-            .attr('r', 5)
-            .attr('fill', (d) => (d.type === 'container' ? 'orange' : 'steelblue'))
-            .call(
-              d3
-                .drag<SVGCircleElement, PeerNodeDatum>()
-                .on('start', (e) => {
-                  if (!e.active) sim.alphaTarget(0.3).restart()
-                  e.subject.fx = e.subject.x
-                  e.subject.fy = e.subject.y
-                })
-                .on('drag', (e) => {
-                  e.subject.fx = e.x
-                  e.subject.fy = e.y
-                })
-                .on('end', (e) => {
-                  if (!e.active) sim.alphaTarget(0)
-                  e.subject.fx = null
-                  e.subject.fy = null
-                }),
-            )
-            .append('title')
-            .text((d) => d.id),
-        (update) => update,
-        (exit) => exit.remove(),
-      )
-
-    // 5) Restart sim
-    sim.alpha(1).restart()
-  }, [nodes, links])
-
-  // 6) Whenever your React nodes/links update, feed them into D3
+  // // 1) init SVG + simulation (runs once)
+  // useEffect(() => {
+  //   if (!svgRef.current) return
+  //
+  //   const width = 600
+  //   const height = 600
+  //
+  //   // clear any old children:
+  //   const svg = d3
+  //     .select(svgRef.current)
+  //     .attr('viewBox', `0 0 ${width} ${height}`)
+  //     .style('max-width', '100%')
+  //     .style('height', 'auto')
+  //   svg.selectAll('*').remove()
+  //
+  //   // fresh groups:
+  //   svg.append('g').attr('class', 'links')
+  //   svg.append('g').attr('class', 'nodes')
+  //
+  //   // build the force simulation
+  //   const sim = d3
+  //     .forceSimulation<PeerNodeDatum>()
+  //     .force(
+  //       'link',
+  //       d3
+  //         .forceLink<PeerNodeDatum, PeerLinkDatum>()
+  //         .id((d) => d.id)
+  //         .distance(100),
+  //     )
+  //     .force('charge', d3.forceManyBody().strength(-20))
+  //     .force('center', d3.forceCenter(width / 2, height / 2))
+  //     .on('tick', () => {
+  //       // on each tick, update positions of <line> and <circle>
+  //       svg
+  //         .select<SVGGElement>('g.links')
+  //         .selectAll<SVGLineElement, PeerLinkDatum>('line')
+  //         .attr('x1', (d) => (d.source as PeerNodeDatum).x!)
+  //         .attr('y1', (d) => (d.source as PeerNodeDatum).y!)
+  //         .attr('x2', (d) => (d.target as PeerNodeDatum).x!)
+  //         .attr('y2', (d) => (d.target as PeerNodeDatum).y!)
+  //
+  //       svg
+  //         .select<SVGGElement>('g.nodes')
+  //         .selectAll<SVGCircleElement, PeerNodeDatum>('circle')
+  //         .attr('cx', (d) => d.x!)
+  //         .attr('cy', (d) => d.y!)
+  //     })
+  //
+  //   simulationRef.current = sim
+  //
+  //   return () => {
+  //     sim.stop()
+  //   }
+  // }, [])
+  //
+  // // 2) feed new nodes/links on change
   // useEffect(() => {
   //   const sim = simulationRef.current
   //   const svgEl = svgRef.current
   //   if (!sim || !svgEl) return
   //
-  //   // 1) Prepare D3 data arrays
-  //   const d3Nodes: PeerNodeDatum[] = nodes.map((d) => ({ id: d.id, type: d.type }))
-  //   const d3Links: PeerLinkDatum[] = links.map((d) => ({
-  //     source: d.source,
-  //     target: d.target,
-  //   }))
-  //
-  //   // 2) Push into simulation
-  //   sim.nodes(d3Nodes)
-  //   const linkForce = sim.force('link') as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>
-  //   linkForce.links(d3Links)
-  //
   //   const svg = d3.select(svgEl)
+  //   const linkGroup = svg.select<SVGGElement>('g.links')
+  //   const nodeGroup = svg.select<SVGGElement>('g.nodes')
   //
-  //   // 3) DATA JOIN for links
-  //   svg
-  //     .select<SVGGElement>('g.links')
+  //   // prepare D3 data
+  //   const d3Nodes: PeerNodeDatum[] = nodes.map((d) => ({ id: d.id, type: d.type }))
+  //   const d3Links: PeerLinkDatum[] = links.map((l) => ({ source: l.source, target: l.target }))
+  //
+  //   // update simulation’s data
+  //   sim.nodes(d3Nodes)
+  //   ;(sim.force('link') as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>).links(d3Links)
+  //
+  //   // LINKS join
+  //   linkGroup
   //     .selectAll<SVGLineElement, PeerLinkDatum>('line')
   //     .data(d3Links, (d) => {
   //       const s = typeof d.source === 'string' ? d.source : d.source.id
@@ -1366,18 +1303,17 @@ export default function Home() {
   //     })
   //     .join(
   //       (enter) => enter.append('line').attr('stroke', '#999').attr('stroke-opacity', 0.6).attr('stroke-width', 2),
-  //       (update) => update,
+  //       (update) => update, // no style changes needed on update
   //       (exit) => exit.remove(),
   //     )
   //
-  //   // 4) DATA JOIN for nodes
-  //   svg
-  //     .select<SVGGElement>('g.nodes')
+  //   // NODES join
+  //   nodeGroup
   //     .selectAll<SVGCircleElement, PeerNodeDatum>('circle')
   //     .data(d3Nodes, (d) => d.id)
   //     .join(
-  //       (enter) =>
-  //         enter
+  //       (enter) => {
+  //         const e = enter
   //           .append('circle')
   //           .attr('r', 5)
   //           .attr('fill', (d) => (d.type === 'container' ? 'orange' : 'steelblue'))
@@ -1399,127 +1335,76 @@ export default function Home() {
   //                 e.subject.fy = null
   //               }),
   //           )
-  //           .append('title')
-  //           .text((d) => d.id),
-  //       (update) => update,
+  //         e.append('title').text((d) => d.id)
+  //         return e
+  //       },
+  //       (update) => update.attr('fill', (d) => (d.type === 'container' ? 'orange' : 'steelblue')),
   //       (exit) => exit.remove(),
   //     )
   //
-  //   // 5) Restart the simulation “clock”
+  //   // re-heat
   //   sim.alpha(1).restart()
   // }, [nodes, links])
+  useEffect(() => {
+    const canvas = canvasRef.current!
+    const ctx = canvas.getContext('2d')!
+    const width = canvas.width
+    const height = canvas.height
 
-  // useEffect(() => {
-  //   const sim = simulationRef.current
-  //   if (!sim) return
-  //   // whenever your React “nodes” changes, make a fresh copy for the sim
-  //   simNodes.current = nodes.map((d) => ({
-  //     id: d.id,
-  //     type: d.type,
-  //   }))
-  //   simulationRef.current!.nodes(simNodes.current)
-  //   simulationRef.current!.alpha(1).restart()
-  // }, [nodes, links])
+    // build the force simulation
+    const sim = d3
+      .forceSimulation<PeerNodeDatum>()
+      .force(
+        'link',
+        d3
+          .forceLink<PeerNodeDatum, PeerLinkDatum>()
+          .id((d) => d.id)
+          .distance(100),
+      )
+      .force('charge', d3.forceManyBody().strength(-300))
+      .force('center', d3.forceCenter(width / 2, height / 2))
+      .on('tick', () => {
+        // clear
+        ctx.clearRect(0, 0, width, height)
 
-  // // init simulation
-  // useEffect(() => {
-  //   const width = 600, height = 600
-  //   if (!svgRef.current) return
-  //
-  //   const svg = d3
-  //     .select(svgRef.current)
-  //     .attr('viewBox', `0 0 ${width} ${height}`)
-  //     .style('max-width', '100%')
-  //     .style('height', 'auto')
-  //
-  //   // groups for links & nodes
-  //   svg.append('g').attr('class', 'links')
-  //   svg.append('g').attr('class', 'nodes')
-  //
-  //   // create an empty sim and store it
-  //   const sim = d3
-  //     .forceSimulation<PeerNodeDatum>()
-  //     .force('link', d3.forceLink<PeerNodeDatum,LinkDatum>().id(d => d.id))
-  //     .force('charge', d3.forceManyBody())
-  //     .force('center', d3.forceCenter(width / 2, height / 2))
-  //     .on('tick', () => {
-  //       const linkSel = svg.select<SVGGElement>('g.links').selectAll('line')
-  //       const nodeSel = svg.select<SVGGElement>('g.nodes').selectAll('circle')
-  //
-  //       linkSel
-  //         .attr('x1', d => (d.source as PeerNodeDatum).x!)
-  //         .attr('y1', d => (d.source as PeerNodeDatum).y!)
-  //         .attr('x2', d => (d.target as PeerNodeDatum).x!)
-  //         .attr('y2', d => (d.target as PeerNodeDatum).y!)
-  //
-  //       nodeSel
-  //         .attr('cx', d => d.x!)
-  //         .attr('cy', d => d.y!)
-  //     })
-  //
-  //   simulationRef.current = sim
-  //   return () => sim.stop()
-  // }, [])
-  //
-  // useEffect(() => {
-  //   const sim = simulationRef.current!
-  //   const color = d3.scaleOrdinal(d3.schemeCategory10)
-  //
-  //   // update the simulation’s internal data
-  //   sim.nodes(nodes)
-  //   ;(sim.force('link') as d3.ForceLink<PeerNodeDatum, LinkDatum>).links(links)
-  //
-  //   // DATA JOIN for links
-  //   const linkSel = linkSelRef.current!.data(links, (d: any) => d.source + '–' + d.target)
-  //
-  //   linkSel.exit().remove()
-  //
-  //   linkSelRef.current = linkSel
-  //     .enter()
-  //     .append('line')
-  //     .attr('stroke', '#999')
-  //     .attr('stroke-opacity', 0.6)
-  //     .attr('stroke-width', (d) => Math.sqrt(d.value))
-  //     .merge(linkSel as any)
-  //
-  //   // DATA JOIN for nodes
-  //   const nodeSel = nodeSelRef.current!.data(nodes, (d) => d.id)
-  //
-  //   nodeSel.exit().remove()
-  //
-  //   const nodeEnter = (nodeSel as any)
-  //     .enter()
-  //     .append('circle')
-  //     .attr('r', 5)
-  //     .attr('stroke', '#fff')
-  //     .attr('stroke-width', 1.5)
-  //     .attr('fill', (d) => color(d.group))
-  //     .call(
-  //       d3
-  //         .drag<SVGCircleElement, PeerNodeDatum>()
-  //         .on('start', (event) => {
-  //           if (!event.active) sim.alphaTarget(0.3).restart()
-  //           event.subject.fx = event.subject.x
-  //           event.subject.fy = event.subject.y
-  //         })
-  //         .on('drag', (event) => {
-  //           event.subject.fx = event.x
-  //           event.subject.fy = event.y
-  //         })
-  //         .on('end', (event) => {
-  //           if (!event.active) sim.alphaTarget(0)
-  //           event.subject.fx = null
-  //           event.subject.fy = null
-  //         }),
-  //     )
-  //
-  //   nodeEnter.append('title').text((d) => d.id)
-  //
-  //   nodeSelRef.current = (nodeEnter as any).merge(nodeSel as any)
-  //
-  //   // restart the sim so forces re-heat
-  //   sim.alpha(1).restart()
-  // }, [nodes, links])
+        // draw links
+        ctx.beginPath()
+        ctx.strokeStyle = '#999'
+        ctx.globalAlpha = 0.6
+        links.forEach((l) => {
+          const s = typeof l.source === 'string' ? sim.nodes().find((n) => n.id === l.source)! : l.source
+          const t = typeof l.target === 'string' ? sim.nodes().find((n) => n.id === l.target)! : l.target
+          ctx.moveTo(s.x!, s.y!)
+          ctx.lineTo(t.x!, t.y!)
+        })
+        ctx.stroke()
+
+        // draw nodes
+        links.forEach(() => {}) // no-op, just for separation
+        sim.nodes().forEach((n) => {
+          ctx.beginPath()
+          ctx.arc(n.x!, n.y!, 5, 0, 2 * Math.PI)
+          ctx.fillStyle = n.type === 'container' ? 'orange' : 'steelblue'
+          ctx.fill()
+        })
+      })
+
+    simulationRef.current = sim
+    return () => {
+      sim.stop()
+    }
+  }, [])
+
+  useEffect(() => {
+    const sim = simulationRef.current!
+    // make D3‐friendly datum
+    const d3Nodes: PeerNodeDatum[] = nodes.map((n) => ({ id: n.id, type: n.type }))
+    const d3Links: PeerLinkDatum[] = links.map((l) => ({ source: l.source, target: l.target }))
+
+    sim.nodes(d3Nodes)
+    ;(sim.force('link')! as d3.ForceLink<PeerNodeDatum, PeerLinkDatum>).links(d3Links)
+    sim.alpha(1).restart()
+  }, [nodes, links])
 
   // html
   return (
@@ -2185,6 +2070,12 @@ export default function Home() {
             )}
           </div>*/}
           <svg ref={svgRef}></svg>
+          <canvas
+            ref={canvasRef}
+            width={600}
+            height={600}
+            style={{ maxWidth: '100%', height: 'auto', backgroundColor: '#111' }}
+          />
         </div>
 
         {/* Sidebar 2: Information and Actions */}
