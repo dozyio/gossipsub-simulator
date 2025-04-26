@@ -185,7 +185,7 @@ export class StatusServer {
           // as const so tuple type is preserved
           return [peer.id.toString(), rp] as const
         } catch (e) {
-          console.error('error getting remote peer from peerStore', e)
+          console.error(`error getting remote peer ${conn.remotePeer} from peerStore`, e)
           return undefined
         }
       }),
