@@ -46,7 +46,7 @@ var (
 
 	// Map to track frontend connections
 	clients   = make(map[*websocket.Conn]bool)
-	clientsMu sync.Mutex
+	clientsMu sync.RWMutex
 	upgrader  = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
@@ -390,21 +390,23 @@ func createAndStartContainer(ctx context.Context, imageName, containerName strin
 		hostPort, _ = strconv.Atoi(portInfo[0].HostPort)
 	}
 
-	// Attempt to set container ID and start listening for updates
-	err = setContainerIDAndListen(hostPort, containerJSON.ID[:12])
-	if err != nil {
-		fmt.Printf("failed to set container id: %s, %s - stopping container\n", containerJSON.ID[:12], err)
+	go func(hostPort int, containerID string) {
+		err := setContainerIDAndListen(hostPort, containerID)
+		if err != nil {
+			fmt.Printf("failed to set container id: %s, %s - stopping container\n", containerJSON.ID[:12], err)
 
-		stopErr := stopContainer(ctx, resp.ID)
-		if stopErr != nil {
-			fmt.Printf("failed to stop container id: %s\n", containerJSON.ID[:12])
-			return "", 0, stopErr
+			stopErr := stopContainer(ctx, resp.ID)
+			if stopErr != nil {
+				fmt.Printf("failed to stop container id: %s %s\n", containerJSON.ID[:12], stopErr)
+			}
+		} else {
+			log.Printf("Set id for container %s", containerID)
 		}
-		return "", 0, err
-	}
+
+		go broadcastContainers()
+	}(hostPort, containerJSON.ID[:12])
 
 	// Broadcast after creation/start
-	go broadcastContainers()
 
 	return resp.ID, hostPort, nil
 }
@@ -421,13 +423,13 @@ func setContainerIDAndListen(hostPort int, containerID string) error {
 			return nil
 		}
 		lastErr = err
-		fmt.Printf("Attempt %d/%d failed to set container ID and listen: %v\n", i, maxRetries, err)
+		fmt.Printf("Attempt %d/%d failed to set container ID %s and listen: %v\n", i, maxRetries, containerID, err)
 		if i < maxRetries {
 			time.Sleep(retryDelay)
 		}
 	}
 
-	return fmt.Errorf("all retries failed: %w", lastErr)
+	return fmt.Errorf("all attempts to set id failed: %s", lastErr)
 }
 
 func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error {
@@ -529,8 +531,8 @@ func addTypeToMessage(msg []byte, msgType string) ([]byte, error) {
 // Container connection management
 func setContainerConn(containerID string, conn *websocket.Conn) {
 	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
 	containerConns[containerID] = conn
+	containerConnsMu.Unlock()
 }
 
 func closeContainerConn(containerID string) {
@@ -820,8 +822,8 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRandomContainerConn() (string, *websocket.Conn) {
-	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
+	containerConnsMu.RLock()
+	defer containerConnsMu.RUnlock()
 
 	if len(containerConns) == 0 {
 		return "", nil
@@ -920,11 +922,12 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		if reqBody.ContainerID != "" {
 			var ok bool
 			containerID = reqBody.ContainerID
-			containerConnsMu.Lock()
+			containerConnsMu.RLock()
 			{
 				c, ok = containerConns[containerID]
 			}
-			containerConnsMu.Unlock()
+			containerConnsMu.RUnlock()
+
 			if !ok {
 				http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 				return
@@ -983,11 +986,11 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 		return
@@ -1042,11 +1045,11 @@ func logHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container in conns id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
@@ -1110,11 +1113,11 @@ func tcpdumpStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
@@ -1173,11 +1176,11 @@ func tcpdumpStopHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
@@ -1285,7 +1288,7 @@ func enableCors(next http.Handler) http.Handler {
 	})
 }
 
-func cleanup() {
+func cleanup(ctx context.Context) {
 	fmt.Println("Cleaning up started containers...")
 
 	logStreamersMu.Lock()
@@ -1303,18 +1306,22 @@ func cleanup() {
 	for _, containerID := range runningContainers {
 		fmt.Printf("Attempting to stop and remove container %s...\n", containerID)
 
+		ctxTo, cancel := context.WithTimeout(ctx, 5*time.Second)
 		timeout := 1
 
-		if err := DockerClient.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		if err := DockerClient.ContainerStop(ctxTo, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
 			fmt.Printf("Error stopping container %s: %v\n", containerID, err)
 		}
 
-		if err := DockerClient.ContainerRemove(context.Background(), containerID, container.RemoveOptions{}); err != nil {
+		if err := DockerClient.ContainerRemove(ctxTo, containerID, container.RemoveOptions{}); err != nil {
 			fmt.Printf("Error removing container %s: %v\n", containerID, err)
 		}
 
+		cancel()
+
 		closeContainerConn(containerID) // Ensure connections are closed
 	}
+
 	runningContainers = nil
 }
 
@@ -1445,7 +1452,9 @@ func main() {
 
 	go func() {
 		<-c
-		cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		cleanup(ctx)
+		cancel()
 		os.Exit(0)
 	}()
 

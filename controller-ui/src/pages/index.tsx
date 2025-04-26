@@ -81,7 +81,7 @@ interface PeerData {
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams'
 type ClickType = 'kill' | 'info' | 'connect' | 'connectTo'
 type HoverType = 'peerscore' | 'rtt'
-type MapView = 'circle' | 'graph'
+type MapView = 'circle' | 'graph' | 'canvas'
 type ControllerStatus = 'offline' | 'online' | 'connecting'
 
 const ENDPOINT = 'http://localhost:8080'
@@ -96,8 +96,8 @@ const CONTAINER_HEIGHT = 800
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 1_000, // Adjusted for CSE
-  attraction: 0.2, // Adjusted for CSE
+  repulsion: 100_000, // Adjusted for CSE
+  attraction: 0.08, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
   gravity: 0.05, // Central gravity strength
   damping: 0.1, // Velocity damping factor
@@ -166,13 +166,14 @@ export default function Home() {
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const remotePeerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const [mapType, setMapType] = useState<MapType>('connections')
-  const [mapView, setMapView] = useState<MapView>('graph')
+  const [mapView, setMapView] = useState<MapView>('canvas')
   const stableCountRef = useRef(0) // Track stable state count
   const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null) // Store interval ID
   const [nodeSize, setNodeSize] = useState<number>(35)
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
@@ -834,6 +835,14 @@ export default function Home() {
     setSelectedTopics(topic)
   }
 
+  const onCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { offsetX: x, offsetY: y } = e.nativeEvent
+    const clicked = Object.entries(allNodes).find(
+      ([id, node]) => Math.hypot(node.x - x, node.y - y) < nodeSize / 2,
+    )?.[0]
+    if (clicked) handleContainerClick(clicked)
+  }
+
   const getBackgroundColor = (containerId: string): string => {
     if (converge) {
       return peerData[containerId]?.lastMessage
@@ -1141,16 +1150,16 @@ export default function Home() {
       })
     })
 
-    // 3) orphans via  remotePeerData links
-    Object.keys(remotePeerData).forEach((remotePeerId) => {
-      if (!isPeerIdAssignedToContainer(remotePeerId)) {
-        Object.entries(peerData).forEach(([containerId, data]) => {
-          if (data.remotePeers?.[remotePeerId]) {
-            newEdges.push({ from: containerId, to: remotePeerId })
-          }
-        })
-      }
-    })
+    // // 3) orphans via  remotePeerData links
+    // Object.keys(remotePeerData).forEach((remotePeerId) => {
+    //   if (!isPeerIdAssignedToContainer(remotePeerId)) {
+    //     Object.entries(peerData).forEach(([containerId, data]) => {
+    //       if (data.remotePeers?.[remotePeerId]) {
+    //         newEdges.push({ from: containerId, to: remotePeerId })
+    //       }
+    //     })
+    //   }
+    // })
 
     // dedupe on unordered pairs
     const uniq = newEdges.filter(
@@ -1207,7 +1216,7 @@ export default function Home() {
 
   // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
-    if (mapView !== 'graph') return
+    if (mapView !== 'graph' && mapView !== 'canvas') return
 
     const centerX = CONTAINER_WIDTH / 2
     const centerY = CONTAINER_HEIGHT / 2
@@ -1356,6 +1365,62 @@ export default function Home() {
       if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
     }
   }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
+
+  useEffect(() => {
+    if (mapView !== 'canvas') return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // clear
+    ctx.clearRect(0, 0, CONTAINER_WIDTH, CONTAINER_HEIGHT)
+
+    // draw edges
+    ctx.lineWidth = 2
+    edges.forEach(({ from, to }) => {
+      const a = allNodes[from]
+      const b = allNodes[to]
+      if (!a || !b) return
+
+      ctx.strokeStyle = '#aaa'
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+    })
+
+    // draw nodes
+    Object.entries(allNodes).forEach(([id, node]) => {
+      // Circle
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, nodeSize / 2, 0, Math.PI * 2)
+      ctx.fillStyle =
+        id in peerData
+          ? getBackgroundColor(id) // container color
+          : 'darkorange' // remote peer color
+      ctx.fill()
+
+      // optional border
+      if (selectedContainer === id) {
+        ctx.lineWidth = 2
+        ctx.strokeStyle = 'white'
+        ctx.stroke()
+      }
+
+      // label
+      const label = getLabel(id)
+      if (label) {
+        ctx.fillStyle = 'white'
+        ctx.font = `${Math.max(8, nodeSize / 3)}px sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(label, node.x, node.y)
+      }
+    })
+  }, [allNodes, edges, selectedContainer, nodeSize, mapView])
 
   // Auto publish if enabled
   useEffect(() => {
@@ -1621,9 +1686,6 @@ export default function Home() {
                 )}
               </div>
             )}
-            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>
-              Pubsub Peer Store
-            </button>
             <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>
               Streams
             </button>
@@ -1660,6 +1722,9 @@ export default function Home() {
                 )}
               </div>
             )}
+            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>
+              Pubsub Peer Store
+            </button>
             <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>
               Libp2p Peer Store
             </button>
@@ -1901,7 +1966,23 @@ export default function Home() {
                 })}
               </div>
             )}
-
+            {mapView === 'canvas' && (
+              <canvas
+                ref={canvasRef}
+                width={CONTAINER_WIDTH}
+                height={CONTAINER_HEIGHT}
+                onClick={onCanvasClick}
+                onMouseMove={(e) => {
+                  const { offsetX: x, offsetY: y } = e.nativeEvent
+                  const over =
+                    Object.entries(allNodes).find(
+                      ([id, node]) => Math.hypot(node.x - x, node.y - y) < nodeSize / 2,
+                    )?.[0] || null
+                  setHoveredContainerId(over)
+                }}
+                style={{ cursor: 'pointer' }}
+              />
+            )}
             {mapView === 'circle' && (
               <div>
                 <svg className='edges'>
@@ -2090,10 +2171,6 @@ export default function Home() {
               <div>
                 Multiaddrs: {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
               </div>
-              <div>x: {remotePeerData[selectedRemotePeer].x}</div>
-              <div>y: {remotePeerData[selectedRemotePeer].y}</div>
-              <div>xv: {remotePeerData[selectedRemotePeer].vx}</div>
-              <div>yv: {remotePeerData[selectedRemotePeer].vy}</div>
             </div>
           )}
           {selectedContainer && peerData[selectedContainer] && (
