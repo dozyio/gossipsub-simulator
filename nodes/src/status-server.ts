@@ -336,17 +336,18 @@ export class StatusServer {
                 dhtProvideStatus: self.lastDhtProvideStatus,
               }
               await self.sendUpdate(update)
-
-              break
             }
+            break
           }
 
           case 'dhtfindprovider': {
             console.log('dhtfindprovider msg', newMessage)
+            break
           }
 
           case 'dhtfindpeer': {
             console.log('dhtfindprovider msg', newMessage)
+            break
           }
 
           default:
