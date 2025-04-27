@@ -1,7 +1,7 @@
 import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
 import { FaRegCircle } from 'react-icons/fa'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 interface PortMapping {
   ip: string
@@ -93,6 +93,12 @@ const DHT_PREFIX = '/ipfs/lan'
 const CONTAINER_WIDTH = 800
 const CONTAINER_HEIGHT = 800
 
+const centerX = CONTAINER_WIDTH / 2
+const centerY = CONTAINER_HEIGHT / 2
+const VELOCITY_THRESHOLD = 0.1
+const STABLE_ITERATIONS = 20
+const MAX_UNSTABLE_ITERATIONS = 25 * 30
+
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
@@ -166,7 +172,7 @@ export default function Home() {
   const containerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const remotePeerRefs = useRef<{ [id: string]: HTMLDivElement | null }>({})
   const [mapType, setMapType] = useState<MapType>('connections')
-  const [mapView, setMapView] = useState<MapView>('canvas')
+  const [mapView, setMapView] = useState<MapView>('graph')
   const stableCountRef = useRef(0) // Track stable state count
   const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
@@ -174,6 +180,11 @@ export default function Home() {
   const [nodeSize, setNodeSize] = useState<number>(35)
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  // const nodesRef = useRef(allNodes)
+  // const edgesRef = useRef(edges)
+  const nodesRef = useRef<Record<string, { x: number; y: number; vx: number; vy: number }>>({})
+  const edgesRef = useRef<{ from: string; to: string }[]>([])
+  const rafIdRef = useRef<number | null>(null)
 
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
@@ -1214,157 +1225,308 @@ export default function Home() {
   //   setMinDistance(distance)
   // }, [containers, nodeSize])
 
-  // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
-    if (mapView !== 'graph' && mapView !== 'canvas') return
+    nodesRef.current = allNodes
+  }, [allNodes])
 
-    const centerX = CONTAINER_WIDTH / 2
-    const centerY = CONTAINER_HEIGHT / 2
-    const VELOCITY_THRESHOLD = 1
-    const STABLE_ITERATIONS = 20
-    const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
+  useEffect(() => {
+    edgesRef.current = edges
+  }, [edges])
 
-    const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-    if (edgesChanged) {
-      stableCountRef.current = 0
-      unstableCountRef.current = 0
+  const stepSimulation = useCallback(() => {
+    let allStable = true
+    const updated = { ...nodesRef.current }
 
-      stabilizedRef.current = false
-      prevEdgesRef.current = edges
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-    }
+    Object.entries(updated).forEach(([id, node]) => {
+      let fx = 0,
+        fy = 0
 
-    intervalIdRef.current = window.setInterval(() => {
-      if (stabilizedRef.current && intervalIdRef.current) {
-        window.clearInterval(intervalIdRef.current)
-        return
+      // 1) check stability
+      if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+        allStable = false
+        stableCountRef.current = 0
       }
 
-      let allStable = true
-      // Clone positions & velocities
-      const updated = { ...allNodes }
-
-      // Compute forces for each nodeId in allNodes
-      Object.entries(updated).forEach(([id, node]) => {
-        let fx = 0
-        let fy = 0
-        // stability
-        if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-          // console.log('id unstable', id)
-          allStable = false
-          stableCountRef.current = 0
-        }
-
-        // 1. Repulsion among all nodes
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1
+      // 2) repulsion
+      try {
+        Object.values(updated).forEach((other) => {
+          if (other === node) return
+          const dx = node.x - other.x,
+            dy = node.y - other.y
+          let dist = Math.hypot(dx, dy) || 1
           dist = Math.max(dist, nodeSize)
           const rep = mapTypeForces[mapType].repulsion / (dist * dist)
           fx += (dx / dist) * rep
           fy += (dy / dist) * rep
         })
+      } catch (err: any) {
+        console.error('Error applying repulsion force:', err)
+      }
 
-        // 2. Attraction along edges
-        edges.forEach((e) => {
+      // 3) attraction
+      try {
+        edgesRef.current.forEach((e) => {
           if (e.from === id || e.to === id) {
-            const otherId = e.from === id ? e.to : e.from
-            const other = updated[otherId]
-            if (!other) return
-            const dx = other.x - node.x
-            const dy = other.y - node.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
+            const other = updated[e.from === id ? e.to : e.from]
+            const dx = other.x - node.x,
+              dy = other.y - node.y
+            const dist = Math.hypot(dx, dy) || 1
             const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
             fx += (dx / dist) * attr
             fy += (dy / dist) * attr
           }
         })
-
-        // 3. Central gravity
-        fx += (centerX - node.x) * mapTypeForces[mapType].gravity
-        fy += (centerY - node.y) * mapTypeForces[mapType].gravity
-
-        // 4. Collision
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          if (dist < minDistance) {
-            const overlap = minDistance - dist
-            const col = (overlap / dist) * mapTypeForces[mapType].collision
-            fx += (dx / dist) * col
-            fy += (dy / dist) * col
-          }
-        })
-
-        // 5. Damping
-        node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-        node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-
-        // 6. Cap velocity
-        node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-        node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-
-        // 7. Update pos
-        node.x += node.vx
-        node.y += node.vy
-
-        // 8. Boundaries
-        node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-        node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-      })
-
-      // Separate updates back to states
-      // Containers
-      setPeerData((prev) => {
-        const next = { ...prev }
-        Object.entries(prev).forEach(([cid]) => {
-          const u = updated[cid]
-          if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-        })
-        return next
-      })
-
-      // Remotes
-      setRemotePeerData((prev) => {
-        const next: RemotePeers = { ...prev }
-        Object.keys(prev).forEach((rid) => {
-          if (isRemotePeerConnectedToContainer(rid)) {
-            const u = updated[rid]
-            if (u) {
-              next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-            }
-          }
-        })
-        return next
-      })
-
-      // stability
-      if (allStable) {
-        stableCountRef.current += 1
-        if (stableCountRef.current >= STABLE_ITERATIONS) {
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
-      } else {
-        stableCountRef.current = 0
-        unstableCountRef.current += 1
-        if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
-          stableCountRef.current = STABLE_ITERATIONS
-          allStable = true
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
+      } catch (err: any) {
+        console.error('Error applying attraction force:', err)
       }
-    }, 30)
+
+      // 4) central gravity
+      fx += (centerX - node.x) * mapTypeForces[mapType].gravity
+      fy += (centerY - node.y) * mapTypeForces[mapType].gravity
+
+      // 5) collision
+      Object.values(updated).forEach((other) => {
+        if (other === node) return
+        const dx = node.x - other.x,
+          dy = node.y - other.y
+        const dist = Math.hypot(dx, dy) || 1
+        if (dist < minDistance) {
+          const overlap = minDistance - dist
+          const col = (overlap / dist) * mapTypeForces[mapType].collision
+          fx += (dx / dist) * col
+          fy += (dy / dist) * col
+        }
+      })
+
+      // 6) damping + cap + integrate
+      node.vx = Math.max(
+        -mapTypeForces[mapType].maxVelocity,
+        Math.min(mapTypeForces[mapType].maxVelocity, (node.vx + fx) * mapTypeForces[mapType].damping),
+      )
+      node.vy = Math.max(
+        -mapTypeForces[mapType].maxVelocity,
+        Math.min(mapTypeForces[mapType].maxVelocity, (node.vy + fy) * mapTypeForces[mapType].damping),
+      )
+
+      node.x = Math.min(CONTAINER_WIDTH - nodeSize / 2, Math.max(nodeSize / 2, node.x + node.vx))
+      node.y = Math.min(CONTAINER_HEIGHT - nodeSize / 2, Math.max(nodeSize / 2, node.y + node.vy))
+    })
+
+    // push back into React state:
+    setPeerData((prev) => {
+      const next = { ...prev }
+      Object.keys(prev).forEach((cid) => {
+        const u = updated[cid]
+        if (u) next[cid] = { ...next[cid], ...u }
+      })
+      return next
+    })
+
+    setRemotePeerData((prev) => {
+      const next = { ...prev }
+      Object.keys(prev).forEach((rid) => {
+        if (isRemotePeerConnectedToContainer(rid)) {
+          const u = updated[rid]
+          if (u) next[rid] = { ...next[rid], ...u }
+        }
+      })
+      return next
+    })
+
+    // track convergence / bail-out
+    if (allStable) {
+      stableCountRef.current += 1
+      if (stableCountRef.current >= STABLE_ITERATIONS) stabilizedRef.current = true
+    } else {
+      unstableCountRef.current += 1
+      if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+        stabilizedRef.current = true
+      }
+    }
+  }, [mapType, nodeSize, minDistance])
+
+  // The rAF‐driven effect
+  useEffect(() => {
+    if (mapView !== 'graph' && mapView !== 'canvas') return
+
+    // reset our counters whenever edges/mapType/view changes
+    stableCountRef.current = 0
+    unstableCountRef.current = 0
+    stabilizedRef.current = false
+
+    // clear any prior frame
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current)
+    }
+
+    const loop = () => {
+      stepSimulation()
+      if (!stabilizedRef.current) {
+        rafIdRef.current = requestAnimationFrame(loop)
+      }
+    }
+
+    // kick it off
+    rafIdRef.current = requestAnimationFrame(loop)
 
     return () => {
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
     }
-  }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
+  }, [mapView, mapType, stepSimulation, edges])
+
+  // // Compound Spring Embedder Force-Directed Layout Implementation
+  // useEffect(() => {
+  //   if (mapView !== 'graph' && mapView !== 'canvas') return
+  //
+  //   const centerX = CONTAINER_WIDTH / 2
+  //   const centerY = CONTAINER_HEIGHT / 2
+  //   const VELOCITY_THRESHOLD = 1
+  //   const STABLE_ITERATIONS = 20
+  //   const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
+  //
+  //   const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
+  //   if (edgesChanged) {
+  //     stableCountRef.current = 0
+  //     unstableCountRef.current = 0
+  //
+  //     stabilizedRef.current = false
+  //     prevEdgesRef.current = edges
+  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //   }
+  //
+  //   intervalIdRef.current = window.setInterval(() => {
+  //     if (stabilizedRef.current && intervalIdRef.current) {
+  //       window.clearInterval(intervalIdRef.current)
+  //       return
+  //     }
+  //
+  //     let allStable = true
+  //     // Clone positions & velocities
+  //     const updated = { ...allNodes }
+  //
+  //     // Compute forces for each nodeId in allNodes
+  //     Object.entries(updated).forEach(([id, node]) => {
+  //       let fx = 0
+  //       let fy = 0
+  //       // stability
+  //       if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+  //         // console.log('id unstable', id)
+  //         allStable = false
+  //         stableCountRef.current = 0
+  //       }
+  //
+  //       // 1. Repulsion among all nodes
+  //       Object.entries(updated).forEach(([oid, other]) => {
+  //         if (id === oid) return
+  //         const dx = node.x - other.x
+  //         const dy = node.y - other.y
+  //         let dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //         dist = Math.max(dist, nodeSize)
+  //         const rep = mapTypeForces[mapType].repulsion / (dist * dist)
+  //         fx += (dx / dist) * rep
+  //         fy += (dy / dist) * rep
+  //       })
+  //
+  //       // 2. Attraction along edges
+  //       edges.forEach((e) => {
+  //         if (e.from === id || e.to === id) {
+  //           const otherId = e.from === id ? e.to : e.from
+  //           const other = updated[otherId]
+  //           if (!other) return
+  //           const dx = other.x - node.x
+  //           const dy = other.y - node.y
+  //           const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //           const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
+  //           fx += (dx / dist) * attr
+  //           fy += (dy / dist) * attr
+  //         }
+  //       })
+  //
+  //       // 3. Central gravity
+  //       fx += (centerX - node.x) * mapTypeForces[mapType].gravity
+  //       fy += (centerY - node.y) * mapTypeForces[mapType].gravity
+  //
+  //       // 4. Collision
+  //       Object.entries(updated).forEach(([oid, other]) => {
+  //         if (id === oid) return
+  //         const dx = node.x - other.x
+  //         const dy = node.y - other.y
+  //         const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //         if (dist < minDistance) {
+  //           const overlap = minDistance - dist
+  //           const col = (overlap / dist) * mapTypeForces[mapType].collision
+  //           fx += (dx / dist) * col
+  //           fy += (dy / dist) * col
+  //         }
+  //       })
+  //
+  //       // 5. Damping
+  //       node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
+  //       node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
+  //
+  //       // 6. Cap velocity
+  //       node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
+  //       node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
+  //
+  //       // 7. Update pos
+  //       node.x += node.vx
+  //       node.y += node.vy
+  //
+  //       // 8. Boundaries
+  //       node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
+  //       node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
+  //     })
+  //
+  //     // Separate updates back to states
+  //     // Containers
+  //     setPeerData((prev) => {
+  //       const next = { ...prev }
+  //       Object.entries(prev).forEach(([cid]) => {
+  //         const u = updated[cid]
+  //         if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+  //       })
+  //       return next
+  //     })
+  //
+  //     // Remotes
+  //     setRemotePeerData((prev) => {
+  //       const next: RemotePeers = { ...prev }
+  //       Object.keys(prev).forEach((rid) => {
+  //         if (isRemotePeerConnectedToContainer(rid)) {
+  //           const u = updated[rid]
+  //           if (u) {
+  //             next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+  //           }
+  //         }
+  //       })
+  //       return next
+  //     })
+  //
+  //     // stability
+  //     if (allStable) {
+  //       stableCountRef.current += 1
+  //       if (stableCountRef.current >= STABLE_ITERATIONS) {
+  //         stabilizedRef.current = true
+  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //       }
+  //     } else {
+  //       stableCountRef.current = 0
+  //       unstableCountRef.current += 1
+  //       if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+  //         stableCountRef.current = STABLE_ITERATIONS
+  //         allStable = true
+  //         stabilizedRef.current = true
+  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //       }
+  //     }
+  //   }, 30)
+  //
+  //   return () => {
+  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //   }
+  // }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
 
   useEffect(() => {
     if (mapView !== 'canvas') return
@@ -2259,6 +2421,7 @@ export default function Home() {
               <div>
                 Multiaddrs: {peerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
               </div>
+              <p>Docker connect: docker exec -it {selectedContainer} /bin/ash</p>
             </div>
           )}
         </div>

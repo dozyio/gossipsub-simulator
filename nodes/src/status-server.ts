@@ -8,6 +8,7 @@ import { fromString } from 'uint8arrays'
 import { toString } from 'uint8arrays'
 import { Multiaddr, multiaddr } from '@multiformats/multiaddr'
 import { SingleKadDHT } from '@libp2p/kad-dht'
+import { CID } from 'multiformats/cid'
 
 interface Stream {
   protocol: string
@@ -43,6 +44,8 @@ interface RemotePeers {
   [peerId: string]: RemotePeer
 }
 
+type DHTProvideStatus = null | 'error' | 'inprogress' | 'done'
+
 type TopicsPeers = Record<string, string[]>
 
 export interface Update {
@@ -61,6 +64,7 @@ export interface Update {
   multiaddrs?: string[]
   topics?: string[]
   dhtPeers?: string[]
+  dhtProvideStatus?: DHTProvideStatus
   lastMessage?: string
   peerScores?: PeerScores
   rtts?: RTTs
@@ -99,6 +103,7 @@ export class StatusServer {
 
   // dht
   private lastDhtPeers: string[] = []
+  private lastDhtProvideStatus: DHTProvideStatus = null
 
   // perf
   private connectTime: number = 0
@@ -304,6 +309,43 @@ export class StatusServer {
             }
 
             break
+          }
+
+          case 'dhtprovide': {
+            console.log('dhtprovide msg', newMessage)
+            try {
+              CID.parse(newMessage.message)
+            } catch (e: any) {
+              console.log('invalid CID', e)
+              self.lastDhtProvideStatus = 'error'
+
+              const update: Update = {
+                dhtProvideStatus: self.lastDhtProvideStatus,
+              }
+              await self.sendUpdate(update)
+
+              break
+            }
+
+            self.lastDhtProvideStatus = 'inprogress'
+            let update: Update = {
+              dhtProvideStatus: self.lastDhtProvideStatus,
+            }
+            await self.sendUpdate(update)
+            await self.server.contentRouting.provide(newMessage.message)
+            self.lastDhtProvideStatus = 'done'
+
+            update = {
+              dhtProvideStatus: self.lastDhtProvideStatus,
+            }
+            await self.sendUpdate(update)
+          }
+
+          case 'dhtfindprovider': {
+            console.log('dhtfindprovider msg', newMessage)
+          }
+
+          case 'dhtfindpeer': {
           }
 
           default:
@@ -536,6 +578,8 @@ export class StatusServer {
       update.dhtPeers = dhtPeers
     }
 
+    // skip dhtProvideStatus as has its own updater
+
     if (!isEqual(this.connectTime, this.lastConnectTime)) {
       update.connectTime = this.connectTime
     }
@@ -622,6 +666,8 @@ export class StatusServer {
     this.lastDhtPeers = dhtPeers
     update.dhtPeers = dhtPeers
 
+    update.dhtProvideStatus = this.lastDhtProvideStatus
+
     // perf connect
     this.lastConnectTime = this.connectTime
     update.connectTime = this.lastConnectTime
@@ -642,6 +688,7 @@ export class StatusServer {
       update.streams ||
       update.multiaddrs ||
       update.dhtPeers ||
+      update.dhtProvideStatus ||
       update.lastMessage ||
       update.peerScores ||
       update.rtts ||
