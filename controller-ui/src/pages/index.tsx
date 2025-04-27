@@ -2,6 +2,9 @@ import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
 import { FaRegCircle } from 'react-icons/fa'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CID } from 'multiformats/cid'
+import { sha256 } from 'multiformats/hashes/sha2'
+import * as raw from 'multiformats/codecs/raw'
 
 interface PortMapping {
   ip: string
@@ -61,6 +64,7 @@ interface PeerData {
   meshPeersList: Record<string, string[]>
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[]
+  dhtProvideStatus: string
   connections: string[] // peer ids of connections
   remotePeers: RemotePeers
   protocols: string[]
@@ -102,13 +106,13 @@ const MAX_UNSTABLE_ITERATIONS = 25 * 30
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 100_000, // Adjusted for CSE
-  attraction: 0.08, // Adjusted for CSE
+  repulsion: 50_000, // Adjusted for CSE
+  attraction: 0.09, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
-  gravity: 0.05, // Central gravity strength
+  gravity: 0.06, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 40, // Maximum velocity cap
-  naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
@@ -145,7 +149,7 @@ export default function Home() {
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
   const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
-  // network config
+  // container config
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev')
   const [debugContainer, setDebugContainer] = useState<boolean>(false)
   const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING)
@@ -165,6 +169,10 @@ export default function Home() {
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
   const [disableNoise, setDisableNoise] = useState<boolean>(false)
+
+  // dht stuff
+  const [dhtProvideString, setDhtProvideString] = useState<string>('')
+  const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
 
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
@@ -600,6 +608,39 @@ export default function Home() {
     }
   }
 
+  const handleDhtProvide = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      cid: string
+      container_id?: string
+    }
+
+    const body: Body = {
+      cid: dhtCidOfString,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/provide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error provide: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error provide:', error)
+    }
+  }
+
   const showContainerInfo = (containerId: string): void => {
     console.log('Current containerData:', peerData)
 
@@ -844,6 +885,12 @@ export default function Home() {
 
   const handleTopicSelect = (topic: string): void => {
     setSelectedTopics(topic)
+  }
+
+  const handleDhtProvideString = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    setDhtProvideString(e.target.value)
+    const cid = CID.create(1, raw.code, await sha256.digest(new TextEncoder().encode(e.target.value)))
+    setDhtCidOfString(cid.toString())
   }
 
   const onCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
@@ -2337,41 +2384,46 @@ export default function Home() {
           )}
           {selectedContainer && peerData[selectedContainer] && (
             <div>
-              <h3>Peer Info</h3>
-
+              <h3>Gossip</h3>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
                 <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
                 <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
                 <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
-                <div className='input-group'>
-                  <label>
-                    Connect to multiaddr:
-                    <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
-                  </label>
-                </div>
-                <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
-                <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
-                  Stop
-                </button>
-                <button onClick={() => getLogs(selectedContainer)}>Logs</button>
-                {!peerData[selectedContainer].tcpdumping && (
-                  <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
-                )}
-                {peerData[selectedContainer].tcpdumping && (
-                  <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
-                )}
               </div>
+              <h3>DHT Commands</h3>
+
+              <div className='input-group'>
+                <label>
+                  Provide: <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
+                </label>
+                <p>CID: {dhtCidOfString}</p>
+                <p>Provide status: {peerData[selectedContainer].dhtProvideStatus}</p>
+                <button onClick={() => handleDhtProvide(selectedContainer)}>Provide</button>
+              </div>
+
+              <h3>Connect</h3>
+              <div className='input-group'>
+                <label>
+                  Connect to multiaddr:
+                  <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
+                </label>
+              </div>
+              <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
+              <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
+                Stop
+              </button>
+              <button onClick={() => getLogs(selectedContainer)}>Logs</button>
+              {!peerData[selectedContainer].tcpdumping && (
+                <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
+              )}
+              {peerData[selectedContainer].tcpdumping && (
+                <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
+              )}
+              <h3>Peer Info</h3>
               <div>Container ID: {selectedContainer}</div>
+              <p>Docker connect: docker exec -it {selectedContainer} /bin/sh</p>
               <p>Type: {peerData[selectedContainer]?.type}</p>
               <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
-              <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
-              <div>
-                {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
-                  <p key={rpid} style={{ marginLeft: '1rem' }}>
-                    {peerData[selectedContainer].remotePeers[rpid].multiaddrs}
-                  </p>
-                ))}
-              </div>
               <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
@@ -2421,7 +2473,14 @@ export default function Home() {
               <div>
                 Multiaddrs: {peerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
               </div>
-              <p>Docker connect: docker exec -it {selectedContainer} /bin/ash</p>
+              <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
+              <div>
+                {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
+                  <p key={rpid} style={{ marginLeft: '1rem' }}>
+                    {peerData[selectedContainer].remotePeers[rpid].multiaddrs}
+                  </p>
+                ))}
+              </div>
             </div>
           )}
         </div>

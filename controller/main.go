@@ -1298,7 +1298,7 @@ func dhtProvideHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	message := &ContainerWSReq{
-		MType:   "dhtProvide",
+		MType:   "dhtprovide",
 		Message: reqBody.CID,
 	}
 

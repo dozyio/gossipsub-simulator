@@ -314,9 +314,22 @@ export class StatusServer {
           case 'dhtprovide': {
             console.log('dhtprovide msg', newMessage)
             try {
-              CID.parse(newMessage.message)
+              const c = CID.parse(newMessage.message)
+
+              self.lastDhtProvideStatus = 'inprogress'
+              let update: Update = {
+                dhtProvideStatus: self.lastDhtProvideStatus,
+              }
+              await self.sendUpdate(update)
+              await self.server.contentRouting.provide(c)
+              self.lastDhtProvideStatus = 'done'
+
+              update = {
+                dhtProvideStatus: self.lastDhtProvideStatus,
+              }
+              await self.sendUpdate(update)
             } catch (e: any) {
-              console.log('invalid CID', e)
+              console.log('provide failed: ', e)
               self.lastDhtProvideStatus = 'error'
 
               const update: Update = {
@@ -326,19 +339,6 @@ export class StatusServer {
 
               break
             }
-
-            self.lastDhtProvideStatus = 'inprogress'
-            let update: Update = {
-              dhtProvideStatus: self.lastDhtProvideStatus,
-            }
-            await self.sendUpdate(update)
-            await self.server.contentRouting.provide(newMessage.message)
-            self.lastDhtProvideStatus = 'done'
-
-            update = {
-              dhtProvideStatus: self.lastDhtProvideStatus,
-            }
-            await self.sendUpdate(update)
           }
 
           case 'dhtfindprovider': {
@@ -346,6 +346,7 @@ export class StatusServer {
           }
 
           case 'dhtfindpeer': {
+            console.log('dhtfindprovider msg', newMessage)
           }
 
           default:
