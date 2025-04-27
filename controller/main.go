@@ -430,24 +430,40 @@ func createAndStartContainer(ctx context.Context, imageName, containerName strin
 }
 
 func setContainerIDAndListen(hostPort int, containerID string) error {
-	// over 5 seconds
-	const maxRetries = 250
-	const retryDelay = 20 * time.Millisecond
+	const (
+		baseDelay  = 20 * time.Millisecond // initial delay
+		maxDelay   = 2 * time.Second       // cap for backoff
+		maxElapsed = 15 * time.Second      // total timeout
+	)
+
+	// create a context that will be cancelled after maxElapsed
+	ctx, cancel := context.WithTimeout(context.Background(), maxElapsed)
+	defer cancel()
 
 	var lastErr error
-	for i := 1; i <= maxRetries; i++ {
+	backoff := baseDelay
+
+	for attempt := 1; ; attempt++ {
 		err := setContainerIDViaWebSocketAndListen(hostPort, containerID)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		fmt.Printf("Attempt %d/%d failed to set container ID %s and listen: %v\n", i, maxRetries, containerID, err)
-		if i < maxRetries {
-			time.Sleep(retryDelay)
+		fmt.Printf("Attempt %d failed to set container ID %q and listen: %v\n", attempt, containerID, err)
+
+		// wait for either backoff timer or context timeout
+		select {
+		case <-ctx.Done():
+			// we've hit the 15s deadline
+			return fmt.Errorf("all attempts to set id failed after %s: %w", maxElapsed, lastErr)
+		case <-time.After(backoff):
+			// increment backoff for next iteration
+			backoff *= 2
+			if backoff > maxDelay {
+				backoff = maxDelay
+			}
 		}
 	}
-
-	return fmt.Errorf("all attempts to set id failed: %s", lastErr)
 }
 
 func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error {
