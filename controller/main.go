@@ -1281,7 +1281,7 @@ func dhtProvideHandler(w http.ResponseWriter, r *http.Request) {
 
 	var reqBody RequestBody
 	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-		log.Printf("dhtProviderHandler: Failed to decode request body: %v", err)
+		log.Printf("dhtProvideHandler: Failed to decode request body: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
@@ -1327,13 +1327,76 @@ func dhtProvideHandler(w http.ResponseWriter, r *http.Request) {
 	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
 		c.Close()
-		http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf("Failed to write 'provide' to container: %s, %v", containerID, err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
 }
 
+// dhtFindProviderHandler
+func dhtFindProviderHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+		CID         string `json:"cid"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("dhtFindProviderHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("dhtFindProvideHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.RLock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.RUnlock()
+	if !ok {
+		log.Printf("dhtFindProviderHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("dhtFindProviderHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := &ContainerWSReq{
+		MType:   "dhtfindprovider",
+		Message: reqBody.CID,
+	}
+
+	msg, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'findprovider' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// wsHandler handles WebSocket connections
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade to websocket (clients)
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -1527,6 +1590,7 @@ func main() {
 	mux.HandleFunc("POST /tcpdump/start", tcpdumpStartHandler)
 	mux.HandleFunc("POST /tcpdump/stop", tcpdumpStopHandler)
 	mux.HandleFunc("POST /dht/provide", dhtProvideHandler)
+	mux.HandleFunc("POST /dht/findprovider", dhtFindProviderHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)

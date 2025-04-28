@@ -65,6 +65,7 @@ interface PeerData {
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[]
   dhtProvideStatus: string
+  dhtFindProviderResult: string[]
   connections: string[] // peer ids of connections
   remotePeers: RemotePeers
   protocols: string[]
@@ -101,7 +102,7 @@ const centerX = CONTAINER_WIDTH / 2
 const centerY = CONTAINER_HEIGHT / 2
 const VELOCITY_THRESHOLD = 0.1
 const STABLE_ITERATIONS = 20
-const MAX_UNSTABLE_ITERATIONS = 25 * 30
+const MAX_UNSTABLE_ITERATIONS = 15 * 30
 
 // Force strengths
 // Compound Spring Embedder layout
@@ -109,7 +110,7 @@ const DEFAULT_FORCES = {
   repulsion: 50_000, // Adjusted for CSE
   attraction: 0.09, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
-  gravity: 0.06, // Central gravity strength
+  gravity: 0.2, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 40, // Maximum velocity cap
   naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
@@ -163,16 +164,18 @@ export default function Home() {
   const [gossipDout, setGossipDout] = useState<string>('2')
   const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false)
   const [minLatency, setMinLatency] = useState<string>('20')
-  const [maxLatency, setMaxLatency] = useState<string>('200')
+  const [maxLatency, setMaxLatency] = useState<string>('50')
   const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false)
-  const [packetLoss, setPacketLoss] = useState<string>('5')
+  const [packetLoss, setPacketLoss] = useState<string>('1')
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
   const [disableNoise, setDisableNoise] = useState<boolean>(false)
+  const [transportCircuitRelay, setTransportCircuitRelay] = useState<boolean>(false)
 
   // dht stuff
   const [dhtProvideString, setDhtProvideString] = useState<string>('')
   const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
+  const [dhtFindProviderCid, setDhtFindProviderCid] = useState<string>('')
 
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
@@ -193,6 +196,8 @@ export default function Home() {
   const nodesRef = useRef<Record<string, { x: number; y: number; vx: number; vy: number }>>({})
   const edgesRef = useRef<{ from: string; to: string }[]>([])
   const rafIdRef = useRef<number | null>(null)
+  const fpsRef = useRef<HTMLDivElement | null>(null)
+  const frameTimesRef = useRef<number[]>([])
 
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
@@ -221,6 +226,8 @@ export default function Home() {
             meshPeersList: {},
             fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
+            dhtProvideStatus: '',
+            dhtFindProviderResult: [],
             connections: [],
             remotePeers: {},
             protocols: [],
@@ -273,7 +280,8 @@ export default function Home() {
     }
   }
 
-  const envSetter = (env: string[] = [], isBootstrap: boolean = false): string[] => {
+  const envSetter = (baseEnv: string[] = [], isBootstrap: boolean = false): string[] => {
+    const env = [...baseEnv]
     env.push(`TOPICS=${topicsName}`)
 
     env.push(`DHTPREFIX=${dhtPrefix}`)
@@ -336,6 +344,10 @@ export default function Home() {
 
     if (disableNoise) {
       env.push('DISABLE_NOISE=1')
+    }
+
+    if (transportCircuitRelay) {
+      env.push('CIRCUIT_RELAY=1')
     }
 
     return env
@@ -625,6 +637,39 @@ export default function Home() {
 
     try {
       const response = await fetch(`${ENDPOINT}/dht/provide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error provide: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error provide:', error)
+    }
+  }
+
+  const handleDhtFindProvider = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      cid: string
+      container_id?: string
+    }
+
+    const body: Body = {
+      cid: dhtFindProviderCid,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/findprovider`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1087,6 +1132,13 @@ export default function Home() {
     return nodes
   }, [peerData, remotePeerData])
 
+  const activeRemotePeers = useMemo(() => {
+    return Object.entries(remotePeerData).filter(([peerId]) =>
+      // keep only those peerIds that show up in some container.remotePeers
+      Object.values(peerData).some((container) => Object.prototype.hasOwnProperty.call(container.remotePeers, peerId)),
+    )
+  }, [remotePeerData, peerData])
+
   // WebSocket for controller
   // Receives containers list and node updates
   useEffect(() => {
@@ -1183,7 +1235,6 @@ export default function Home() {
           break
         default:
           // connections, pubsubPeers, libp2pPeers, dhtPeers
-
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (Array.isArray((data as any)[mapType])) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1197,33 +1248,26 @@ export default function Home() {
         const targetCid = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
         if (targetCid) {
           newEdges.push({ from: containerId, to: targetCid })
-        }
-      })
-
-      // 2) container → remote via remotePeers if not assigned to a container
-      Object.keys(data.remotePeers || {}).forEach((remotePeerId) => {
-        if (!isPeerIdAssignedToContainer(remotePeerId)) {
-          newEdges.push({ from: containerId, to: remotePeerId })
+        } else {
+          // container → remote (because peerId isn’t in any container)
+          newEdges.push({ from: containerId, to: peerId })
         }
       })
     })
 
-    // // 3) orphans via  remotePeerData links
-    // Object.keys(remotePeerData).forEach((remotePeerId) => {
-    //   if (!isPeerIdAssignedToContainer(remotePeerId)) {
-    //     Object.entries(peerData).forEach(([containerId, data]) => {
-    //       if (data.remotePeers?.[remotePeerId]) {
-    //         newEdges.push({ from: containerId, to: remotePeerId })
-    //       }
-    //     })
-    //   }
-    // })
+    const seen = new Set<string>()
+    const uniq: { from: string; to: string }[] = []
 
-    // dedupe on unordered pairs
-    const uniq = newEdges.filter(
-      (e, i) =>
-        newEdges.findIndex((f) => (f.from === e.from && f.to === e.to) || (f.from === e.to && f.to === e.from)) === i,
-    )
+    for (const { from, to } of newEdges) {
+      // sort endpoints so “A–B” and “B–A” both map to “A--B”
+      const [a, b] = [from, to].sort()
+      const key = `${a}--${b}`
+
+      if (!seen.has(key)) {
+        seen.add(key)
+        uniq.push({ from, to })
+      }
+    }
 
     if (
       uniq.length !== prevEdgesRef.current.length ||
@@ -1231,7 +1275,7 @@ export default function Home() {
     ) {
       prevEdgesRef.current = uniq
       setEdges(uniq)
-      console.log('Updated edges:', uniq)
+      // console.log('Updated edges:', uniq)
     }
   }, [peerData, remotePeerData, mapType, selectedTopic])
 
@@ -1397,6 +1441,7 @@ export default function Home() {
     if (mapView !== 'graph' && mapView !== 'canvas') return
 
     // reset our counters whenever edges/mapType/view changes
+    frameTimesRef.current = []
     stableCountRef.current = 0
     unstableCountRef.current = 0
     stabilizedRef.current = false
@@ -1407,6 +1452,13 @@ export default function Home() {
     }
 
     const loop = () => {
+      // const times = frameTimesRef.current
+      // times.push(timestamp)
+      // // drop anything older than 1 s
+      // const cutoff = timestamp - 1000
+      // while (times.length && times[0] < cutoff) times.shift()
+      // // fps = number of frames in last second
+      // if (fpsRef.current) fpsRef.current.textContent = `${times.length} FPS`
       stepSimulation()
       if (!stabilizedRef.current) {
         rafIdRef.current = requestAnimationFrame(loop)
@@ -1422,6 +1474,41 @@ export default function Home() {
       }
     }
   }, [mapView, mapType, stepSimulation, edges])
+
+  useEffect(() => {
+    let rafId: number
+    let last = performance.now()
+    const deltas: number[] = []
+    const maxSamples = 60 // average over last 60 frames (~1s)
+
+    const fpsLoop = (now: number) => {
+      // 1) compute delta
+      const delta = now - last
+      last = now
+
+      // 2) push & trim
+      deltas.push(delta)
+      if (deltas.length > maxSamples) deltas.shift()
+
+      // 3) compute average delta & FPS
+      const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length
+      const fps = 1000 / avgDelta
+
+      // 4) write into DOM once (no React state)
+      if (fpsRef.current) fpsRef.current.textContent = `${fps.toFixed(1)} FPS`
+
+      // 5) next tick
+      rafId = requestAnimationFrame(fpsLoop)
+    }
+
+    // kick it off
+    rafId = requestAnimationFrame((t) => {
+      last = t
+      fpsLoop(t)
+    })
+
+    return () => cancelAnimationFrame(rafId)
+  }, []) // run once on mount
 
   // // Compound Spring Embedder Force-Directed Layout Implementation
   // useEffect(() => {
@@ -1732,7 +1819,7 @@ export default function Home() {
                 checked={hasGossipDSettings}
                 onChange={() => setHasGossipDSettings(!hasGossipDSettings)}
               />
-              <span style={{ marginLeft: '5px' }}>Gossip D Settings (not bootstrappers)</span>
+              <span style={{ marginLeft: '5px' }}>Gossip D Settings (gossip peers only)</span>
             </label>
           </div>
           {hasGossipDSettings && (
@@ -1782,7 +1869,7 @@ export default function Home() {
           <div className='input-group'>
             <label>
               <input type='checkbox' checked={disableNoise} onChange={() => setDisableNoise(!disableNoise)} />
-              <span style={{ marginLeft: '5px' }}>Disable Noise</span>
+              <span style={{ marginLeft: '5px' }}>Disable Noise (tcpdump)</span>
             </label>
           </div>
           <div className='input-group'>
@@ -1799,6 +1886,7 @@ export default function Home() {
                 onChange={() => {
                   setDhtAllowPrivate(!dhtAllowPrivate)
                   setDhtAllowPublic(dhtAllowPrivate)
+                  if (dhtPrefix === '/ipfs') setDhtPrefix('/ipfs/lan')
                 }}
               />
               <span style={{ marginLeft: '5px' }}>DHT Allow Private Addr</span>
@@ -1812,9 +1900,22 @@ export default function Home() {
                 onChange={() => {
                   setDhtAllowPublic(!dhtAllowPublic)
                   setDhtAllowPrivate(dhtAllowPublic)
+                  if (dhtPrefix === '/ipfs/lan') setDhtPrefix('/ipfs')
                 }}
               />
               <span style={{ marginLeft: '5px' }}>DHT Allow Public Addr</span>
+            </label>
+          </div>
+          <div className='input-group'>
+            <label>
+              <input
+                type='checkbox'
+                checked={transportCircuitRelay}
+                onChange={() => {
+                  setTransportCircuitRelay(!transportCircuitRelay)
+                }}
+              />
+              <span style={{ marginLeft: '5px' }}>Circuit relay (gossip peers only)</span>
             </label>
           </div>
 
@@ -1945,6 +2046,23 @@ export default function Home() {
 
         {/* Middle Section: Graph */}
         <div className='middle'>
+          <div
+            ref={fpsRef}
+            style={{
+              position: 'absolute',
+              bottom: '8px',
+              right: '8px',
+              padding: '4px 8px',
+              background: 'rgba(0,0,0,0.6)',
+              color: 'white',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              borderRadius: '4px',
+              zIndex: 1000,
+            }}
+          >
+            — FPS —
+          </div>
           {controllerStatus === 'connecting' && (
             <div
               style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'green', fontSize: '20px' }}
@@ -1964,6 +2082,7 @@ export default function Home() {
               <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
               <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
+              {/* FPS Overlay */}
             </div>
           )}
           <div
@@ -2069,7 +2188,7 @@ export default function Home() {
                           '/ipfs/ping/1.0.0': '#000ff0',
                           // Add more protocols and their corresponding colors here
                         }
-                        strokeColor = protocolColorMap[connectionProtocol] || '#000000'
+                        strokeColor = protocolColorMap[connectionProtocol] || '#f0f0f0'
                       } else {
                         // For connections without a protocol, use default coloring
                         strokeColor = `#${conn.from.substring(0, 6)}`
@@ -2133,7 +2252,7 @@ export default function Home() {
                   )
                 })}
 
-                {Object.keys(remotePeerData).map((k) => {
+                {/* {Object.keys(remotePeerData).map((k) => {
                   // eslint-disable-next-line @typescript-eslint/no-unused-vars
                   for (const [_, containerDetails] of Object.entries(peerData)) {
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -2172,7 +2291,35 @@ export default function Home() {
                       }
                     }
                   }
-                })}
+                })} */}
+                {activeRemotePeers.map(([peerId, peer]) => (
+                  <div
+                    key={peerId}
+                    ref={(el) => {
+                      remotePeerRefs.current[peerId] = el
+                    }}
+                    className='container remotepeer'
+                    onClick={() => handleRemotePeerClick(peerId)}
+                    style={{
+                      width: `${nodeSize}px`,
+                      height: `${nodeSize}px`,
+                      lineHeight: `${nodeSize}px`,
+                      left: `${remotePeerData[peerId].x}px`,
+                      top: `${remotePeerData[peerId].y}px`,
+                      fontSize: `${Math.max(8, nodeSize / 3)}px`,
+                      backgroundColor: `darkorange`, //`${getBackgroundColor(container.id)}`,
+                      // opacity: 1, // `${getOpacity(container.id)}`,
+                      // border: `${getBorderStyle(container.id)}`,
+                      // borderRadius: `${getBorderRadius(container.id)}`,
+                      position: 'absolute',
+                      transform: `translate(-50%, -50%)`, // Center the node
+                      transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                    }}
+                    title={`Remote Peer\nPeer ID: ${peerId}`}
+                  >
+                    {peerId}
+                  </div>
+                ))}
               </div>
             )}
             {mapView === 'canvas' && (
@@ -2372,13 +2519,20 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {remotePeerData[selectedRemotePeer]?.protocols?.map((p, index) => (
-                  <p key={index} style={{ marginLeft: '1rem' }}>
+                  <p key={index}>
+                    &bull;{'\u00A0'}
                     {p}
                   </p>
                 ))}
               </div>
               <div>
-                Multiaddrs: {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+                Multiaddrs:{' '}
+                {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => (
+                  <p key={index}>
+                    &bull;{'\u00A0'}
+                    {p}
+                  </p>
+                ))}
               </div>
             </div>
           )}
@@ -2396,19 +2550,86 @@ export default function Home() {
                 <label>
                   Provide: <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
                 </label>
-                <p>CID: {dhtCidOfString}</p>
+                <p>
+                  CID: <span style={{ userSelect: 'text' }}>{dhtCidOfString}</span>
+                </p>
                 <p>Provide status: {peerData[selectedContainer].dhtProvideStatus}</p>
                 <button onClick={() => handleDhtProvide(selectedContainer)}>Provide</button>
+              </div>
+              <div>
+                Find CID Provider:{' '}
+                <input type='text' value={dhtFindProviderCid} onChange={(e) => setDhtFindProviderCid(e.target.value)} />
+                <button onClick={() => handleDhtFindProvider(selectedContainer)}>Find Providers</button>
+                <div>
+                  Find Providers results:
+                  {peerData[selectedContainer]?.dhtFindProviderResult?.map((p, index) => (
+                    <p key={index}>
+                      &bull;{'\u00A0'}
+                      {p}
+                    </p>
+                  ))}
+                </div>
               </div>
 
               <h3>Connect</h3>
               <div className='input-group'>
                 <label>
                   Connect to multiaddr:
-                  <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
+                  <div style={{ display: 'flex' }}>
+                    <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
+                    <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Go</button>
+                  </div>
                 </label>
               </div>
-              <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
+              <div className='input-group'>
+                <label>
+                  Dial public bootrapper:
+                  <div style={{ display: 'flex', gap: '0px 15px' }}>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+                        )
+                      }
+                    >
+                      Qm..GAJN
+                    </button>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+                        )
+                      }
+                    >
+                      Qm..uLTa
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0px 15px' }}>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+                        )
+                      }
+                    >
+                      Qm..75Nb
+                    </button>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+                        )
+                      }
+                    >
+                      Qm..3dwt
+                    </button>
+                  </div>
+                </label>
+              </div>
               <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
                 Stop
               </button>
@@ -2465,19 +2686,27 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {peerData[selectedContainer]?.protocols?.map((p, index) => (
-                  <p key={index} style={{ marginLeft: '1rem' }}>
+                  <p key={index}>
+                    &bull;{'\u00A0'}
                     {p}
                   </p>
                 ))}
               </div>
               <div>
-                Multiaddrs: {peerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+                Multiaddrs:{' '}
+                {peerData[selectedContainer]?.multiaddrs?.map((p, index) => (
+                  <p key={index}>
+                    &bull;{'\u00A0'}
+                    {p}
+                  </p>
+                ))}
               </div>
               <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
               <div>
                 {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
                   <p key={rpid} style={{ marginLeft: '1rem' }}>
-                    {peerData[selectedContainer].remotePeers[rpid].multiaddrs}
+                    &bull;{'\u00A0'}
+                    {rpid}
                   </p>
                 ))}
               </div>

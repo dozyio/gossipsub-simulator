@@ -65,6 +65,7 @@ export interface Update {
   topics?: string[]
   dhtPeers?: string[]
   dhtProvideStatus?: DHTProvideStatus
+  dhtFindProviderResult?: string[]
   lastMessage?: string
   peerScores?: PeerScores
   rtts?: RTTs
@@ -104,6 +105,7 @@ export class StatusServer {
   // dht
   private lastDhtPeers: string[] = []
   private lastDhtProvideStatus: DHTProvideStatus = null
+  private lastDhtFindProviderResult: string[] = []
 
   // perf
   private connectTime: number = 0
@@ -155,11 +157,7 @@ export class StatusServer {
 
     const remotePeers = await this.getRemotePeers()
 
-    const update: Update = {
-      connections,
-      remotePeers,
-    }
-    await this.sendUpdate(update)
+    await this.sendUpdate({ connections, remotePeers })
   }
 
   private handlePubsubMessageEvent = async (evt: CustomEvent) => {
@@ -170,11 +168,7 @@ export class StatusServer {
 
     this.message = toString(evt.detail.data)
 
-    const update: Update = {
-      lastMessage: this.message,
-    }
-
-    await this.sendUpdate(update)
+    await this.sendUpdate({ lastMessage: this.message })
   }
 
   private getRemotePeers = async (): Promise<RemotePeers> => {
@@ -239,8 +233,7 @@ export class StatusServer {
           case 'set-id': {
             console.log('setting container id', newMessage.message)
             self.containerId = newMessage.message
-            const update = await self.fullUpdate()
-            await self.sendUpdate(update)
+            await self.sendUpdate(await self.fullUpdate())
             break
           }
 
@@ -262,10 +255,7 @@ export class StatusServer {
             if (self.server.services.pubsub) {
               try {
                 await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
-                const update: Update = {
-                  lastMessage: newMessage.message,
-                }
-                await self.sendUpdate(update)
+                await self.sendUpdate({ lastMessage: newMessage.message })
               } catch (e) {
                 console.log(e)
               }
@@ -317,31 +307,71 @@ export class StatusServer {
               const c = CID.parse(newMessage.message)
 
               self.lastDhtProvideStatus = 'inprogress'
-              let update: Update = {
-                dhtProvideStatus: self.lastDhtProvideStatus,
-              }
-              await self.sendUpdate(update)
+              await self.sendUpdate({ dhtProvideStatus: self.lastDhtProvideStatus })
               await self.server.contentRouting.provide(c)
               self.lastDhtProvideStatus = 'done'
 
-              update = {
-                dhtProvideStatus: self.lastDhtProvideStatus,
-              }
-              await self.sendUpdate(update)
+              await self.sendUpdate({ dhtProvideStatus: self.lastDhtProvideStatus })
             } catch (e: any) {
               console.log('provide failed: ', e)
               self.lastDhtProvideStatus = 'error'
 
-              const update: Update = {
-                dhtProvideStatus: self.lastDhtProvideStatus,
-              }
-              await self.sendUpdate(update)
+              await self.sendUpdate({ dhtProvideStatus: self.lastDhtProvideStatus })
             }
             break
           }
 
           case 'dhtfindprovider': {
             console.log('dhtfindprovider msg', newMessage)
+
+            let c: CID
+            try {
+              c = CID.parse(newMessage.message)
+            } catch (e: any) {
+              self.lastDhtFindProviderResult = ['invalid CID']
+
+              await self.sendUpdate({
+                dhtFindProviderResult: self.lastDhtFindProviderResult,
+              })
+              break
+            }
+
+            self.lastDhtFindProviderResult = ['searching']
+            await self.sendUpdate({
+              dhtFindProviderResult: self.lastDhtFindProviderResult,
+            })
+            try {
+              for await (const provider of self.server.contentRouting.findProviders(c, {
+                signal: AbortSignal.timeout(60_000),
+              })) {
+                console.log(provider)
+
+                if (self.lastDhtFindProviderResult.length === 1 && self.lastDhtFindProviderResult[0] === 'searching') {
+                  self.lastDhtFindProviderResult = []
+                  self.lastDhtFindProviderResult.push(provider.id.toString())
+                } else {
+                  self.lastDhtFindProviderResult.push(provider.id.toString())
+                }
+
+                await self.sendUpdate({ dhtFindProviderResult: self.lastDhtFindProviderResult })
+              }
+            } catch (e: any) {
+              if (e.name === 'QueryAbortedError') {
+                console.log('dhtFindProvider aborted')
+                if (self.lastDhtFindProviderResult.length > 0) {
+                  if (self.lastDhtFindProviderResult[0] === 'searching') {
+                    self.lastDhtFindProviderResult[0] = 'no-providers-found'
+                  } else {
+                    self.lastDhtFindProviderResult.push('ended-after-60s')
+                  }
+                  await self.sendUpdate({ dhtFindProviderResult: self.lastDhtFindProviderResult })
+                }
+              } else {
+                self.lastDhtFindProviderResult = [`error ${e}`]
+
+                await self.sendUpdate({ dhtFindProviderResult: self.lastDhtFindProviderResult })
+              }
+            }
             break
           }
 
@@ -581,6 +611,7 @@ export class StatusServer {
     }
 
     // skip dhtProvideStatus as has its own updater
+    // skip dhtFindProviderResult as has its own updater
 
     if (!isEqual(this.connectTime, this.lastConnectTime)) {
       update.connectTime = this.connectTime
@@ -669,6 +700,7 @@ export class StatusServer {
     update.dhtPeers = dhtPeers
 
     update.dhtProvideStatus = this.lastDhtProvideStatus
+    update.dhtFindProviderResult = this.lastDhtFindProviderResult
 
     // perf connect
     this.lastConnectTime = this.connectTime
@@ -691,6 +723,7 @@ export class StatusServer {
       update.multiaddrs ||
       update.dhtPeers ||
       update.dhtProvideStatus ||
+      update.dhtFindProviderResult ||
       update.lastMessage ||
       update.peerScores ||
       update.rtts ||
