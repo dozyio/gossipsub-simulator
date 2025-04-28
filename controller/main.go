@@ -80,9 +80,8 @@ type NetworkConfig struct {
 }
 
 type ContainerWSReq struct {
-	MType   string `json:"mType"`
-	Message string `json:"message"`
-	Topic   string `json:"topic,omitempty"`
+	MType   string         `json:"mType"`
+	Message map[string]any `json:"message"`
 }
 
 type prefixWriter struct {
@@ -480,9 +479,13 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 		return fmt.Errorf("failed to read initial message: %w", err)
 	}
 
+	message := map[string]any{
+		"id": containerID,
+	}
+
 	msg := &ContainerWSReq{
 		MType:   "set-id",
-		Message: containerID,
+		Message: message,
 	}
 
 	data, err := json.Marshal(msg)
@@ -930,6 +933,7 @@ func getRandomColorV2() string {
 func publishHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		Amount      int    `json:"amount"`
+		Size        int    `json:"size,omitempty"`
 		Topic       string `json:"topic,omitempty"`
 		ContainerID string `json:"containerId,omitempty"`
 	}
@@ -940,6 +944,8 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	fmt.Printf("reqbody %+v\n", reqBody)
+
 	amount := 1
 	if reqBody.Amount <= 0 {
 		amount = 1
@@ -947,50 +953,61 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		amount = reqBody.Amount
 	}
 
+	size := 1
+	if reqBody.Size <= 0 {
+		size = 1
+	} else {
+		size = reqBody.Size
+	}
+
 	containerID := ""
 	var c *websocket.Conn
 
-	for range amount {
-		if reqBody.ContainerID != "" {
-			var ok bool
-			containerID = reqBody.ContainerID
-			containerConnsMu.RLock()
-			{
-				c, ok = containerConns[containerID]
-			}
-			containerConnsMu.RUnlock()
-
-			if !ok {
-				http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
-				return
-			}
-		} else {
-			containerID, c = getRandomContainerConn()
+	if reqBody.ContainerID != "" {
+		var ok bool
+		containerID = reqBody.ContainerID
+		containerConnsMu.RLock()
+		{
+			c, ok = containerConns[containerID]
 		}
+		containerConnsMu.RUnlock()
 
-		if c == nil {
-			http.Error(w, fmt.Sprintf("Failed to write 'publish' to container - container not found: %s", containerID), http.StatusInternalServerError)
+		if !ok {
+			http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 			return
 		}
+	} else {
+		containerID, c = getRandomContainerConn()
+	}
 
-		message := &ContainerWSReq{
-			MType:   "publish",
-			Message: getRandomColorV2(),
-			Topic:   reqBody.Topic,
-		}
+	if c == nil {
+		http.Error(w, fmt.Sprintf("Failed to write 'publish' to container - container not found: %s", containerID), http.StatusInternalServerError)
+		return
+	}
 
-		msg, err := json.Marshal(message)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
-			return
-		}
+	message := map[string]any{
+		"message": getRandomColorV2(),
+		"topic":   reqBody.Topic,
+		"amount":  amount,
+		"size":    size,
+	}
 
-		c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
-			c.Close()
-			http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
-			return
-		}
+	msg := &ContainerWSReq{
+		MType:   "publish",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -1033,19 +1050,23 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := &ContainerWSReq{
-		MType:   "connect",
-		Message: reqBody.ToMultiaddrs,
+	message := map[string]any{
+		"multiaddrs": reqBody.ToMultiaddrs,
 	}
 
-	msg, err := json.Marshal(message)
+	msg := &ContainerWSReq{
+		MType:   "connect",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	c.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.Close()
 		http.Error(w, fmt.Sprintf("Failed to write 'connect' to container: %s, %v", containerID, err), http.StatusInternalServerError)
 		return
@@ -1313,19 +1334,23 @@ func dhtProvideHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := &ContainerWSReq{
-		MType:   "dhtprovide",
-		Message: reqBody.CID,
+	message := map[string]any{
+		"cid": reqBody.CID,
 	}
 
-	msg, err := json.Marshal(message)
+	msg := &ContainerWSReq{
+		MType:   "dhtprovide",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.Close()
 		http.Error(w, fmt.Sprintf("Failed to write 'provide' to container: %s, %v", containerID, err), http.StatusInternalServerError)
 		return
@@ -1375,19 +1400,23 @@ func dhtFindProviderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	message := &ContainerWSReq{
-		MType:   "dhtfindprovider",
-		Message: reqBody.CID,
+	message := map[string]any{
+		"cid": reqBody.CID,
 	}
 
-	msg, err := json.Marshal(message)
+	msg := &ContainerWSReq{
+		MType:   "dhtfindprovider",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.Close()
 		http.Error(w, fmt.Sprintf("Failed to write 'findprovider' to container: %s, %v", containerID, err), http.StatusInternalServerError)
 		return

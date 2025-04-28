@@ -214,6 +214,45 @@ export class StatusServer {
     return peerScores
   }
 
+  private getRandomColor(): string {
+    // Converts an 8-bit channel (0–255) into linearized RGB space
+    const channelLuminance = (c: number): number => {
+      const sc = c / 255
+      return sc <= 0.03928 ? sc / 12.92 : Math.pow((sc + 0.055) / 1.055, 2.4)
+    }
+
+    for (;;) {
+      // Generate a random 24-bit integer (0x000000–0xFFFFFF)
+      const colorVal = Math.floor(Math.random() * 0x1000000)
+
+      // Extract RGB channels
+      const r = (colorVal >> 16) & 0xff
+      const g = (colorVal >> 8) & 0xff
+      const b = colorVal & 0xff
+
+      // Compute relative luminance of the random colour
+      const R = channelLuminance(r)
+      const G = channelLuminance(g)
+      const B = channelLuminance(b)
+      const bgLum = 0.2126 * R + 0.7152 * G + 0.0722 * B
+
+      // Luminance of white is 1.0
+      const whiteLum = 1.0
+      // Determine which is brighter/darker
+      const brighter = Math.max(bgLum, whiteLum)
+      const darker = Math.min(bgLum, whiteLum)
+
+      // Contrast ratio per WCAG: (L1 + 0.05) / (L2 + 0.05)
+      const ratio = (brighter + 0.05) / (darker + 0.05)
+
+      // Return as soon as we find one with sufficient contrast
+      if (ratio >= 4.5) {
+        // Format as "#RRGGBB"
+        return `#${colorVal.toString(16).padStart(6, '0').toUpperCase()}`
+      }
+    }
+  }
+
   private wssSetup = (wss: WebSocketServer) => {
     const self = this
 
@@ -231,9 +270,13 @@ export class StatusServer {
 
         switch (newMessage.mType) {
           case 'set-id': {
-            console.log('setting container id', newMessage.message)
-            self.containerId = newMessage.message
-            await self.sendUpdate(await self.fullUpdate())
+            try {
+              console.log('setting container id', newMessage.message.id)
+              self.containerId = newMessage.message.id
+              await self.sendUpdate(await self.fullUpdate())
+            } catch (e) {
+              console.log('set-id error', e)
+            }
             break
           }
 
@@ -247,20 +290,37 @@ export class StatusServer {
           }
 
           case 'publish': {
-            self.message = newMessage.message
-            self.lastMessage = newMessage.message
-            const topic = newMessage.topic
+            if (!self.server.services.pubsub) {
+              return
+            }
+
+            // todo handle size
+            self.message = newMessage.message.message
+            self.lastMessage = newMessage.message.message
+            const topic = newMessage.message.topic
             console.log('publish msg', newMessage)
 
-            if (self.server.services.pubsub) {
+            let amount = 1
+            if (newMessage.message.amount <= 0) {
+              amount = 1
+            } else {
+              amount = newMessage.message.amount
+            }
+
+            for (let i = 0; i < amount; i++) {
               try {
-                await self.server.services.pubsub.publish(topic, fromString(newMessage.message))
-                await self.sendUpdate({ lastMessage: newMessage.message })
+                const pubRes = await self.server.services.pubsub.publish(topic, fromString(self.message))
+                // console.log('published', pubRes)
+                await self.sendUpdate({ lastMessage: self.message })
               } catch (e) {
                 console.log(e)
               }
-            }
 
+              if (amount > 1) {
+                self.message = self.getRandomColor()
+                self.lastMessage = self.message
+              }
+            }
             break
           }
 
@@ -269,7 +329,7 @@ export class StatusServer {
             try {
               let maa: Multiaddr[] = []
 
-              newMessage.message.split(',').forEach((m: string) => {
+              newMessage.message.multiaddrs.split(',').forEach((m: string) => {
                 maa.push(multiaddr(m))
               })
 
@@ -304,7 +364,7 @@ export class StatusServer {
           case 'dhtprovide': {
             console.log('dhtprovide msg', newMessage)
             try {
-              const c = CID.parse(newMessage.message)
+              const c = CID.parse(newMessage.message.cid)
 
               self.lastDhtProvideStatus = 'inprogress'
               await self.sendUpdate({ dhtProvideStatus: self.lastDhtProvideStatus })
@@ -326,7 +386,7 @@ export class StatusServer {
 
             let c: CID
             try {
-              c = CID.parse(newMessage.message)
+              c = CID.parse(newMessage.message.cid)
             } catch (e: any) {
               self.lastDhtFindProviderResult = ['invalid CID']
 

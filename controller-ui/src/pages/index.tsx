@@ -582,7 +582,7 @@ export default function Home() {
     }
   }
 
-  const publishToTopic = async (containerId: string = '', amount = 1): Promise<void> => {
+  const publishToTopic = async (containerId: string = '', amount = 1, size = 1): Promise<void> => {
     if (containers.length === 0) {
       return
     }
@@ -590,12 +590,14 @@ export default function Home() {
     interface Body {
       amount: number
       topic: string
+      size: number
       containerId?: string
     }
 
     const body: Body = {
-      amount: amount,
+      amount,
       topic: selectedTopic,
+      size,
     }
 
     if (containerId !== '') {
@@ -1915,7 +1917,7 @@ export default function Home() {
                   setTransportCircuitRelay(!transportCircuitRelay)
                 }}
               />
-              <span style={{ marginLeft: '5px' }}>Circuit relay (gossip peers only)</span>
+              <span style={{ marginLeft: '5px' }}>Enable circuit relay transport (gossip peers only)</span>
             </label>
           </div>
 
@@ -2473,8 +2475,9 @@ export default function Home() {
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
           <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
-          <button onClick={() => setConverge(!converge)}>Show Convergence is: {converge ? 'ON' : 'OFF'}</button>
-          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish is: {autoPublish ? 'ON' : 'OFF'}</button>
+          <h3>Gossipsub</h3>
+          <button onClick={() => setConverge(!converge)}>Show Convergence: {converge ? 'ON' : 'OFF'}</button>
+          <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish: {autoPublish ? 'ON' : 'OFF'}</button>
           {autoPublish && (
             <div className='input-group'>
               <label>
@@ -2538,11 +2541,11 @@ export default function Home() {
           )}
           {selectedContainer && peerData[selectedContainer] && (
             <div>
-              <h3>Gossip</h3>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-                <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
-                <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
-                <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
+              <p>Publish to selected peer</p>
+              <div style={{ display: 'flex' }}>
+                <button onClick={() => publishToTopic(selectedContainer, 1)}>1</button>
+                <button onClick={() => publishToTopic(selectedContainer, 1_000)}>1k</button>
+                <button onClick={() => publishToTopic(selectedContainer, 100_000)}>100k</button>
               </div>
               <h3>DHT Commands</h3>
 
@@ -2557,9 +2560,16 @@ export default function Home() {
                 <button onClick={() => handleDhtProvide(selectedContainer)}>Provide</button>
               </div>
               <div>
-                Find CID Provider:{' '}
-                <input type='text' value={dhtFindProviderCid} onChange={(e) => setDhtFindProviderCid(e.target.value)} />
-                <button onClick={() => handleDhtFindProvider(selectedContainer)}>Find Providers</button>
+                <div className='input-group'>
+                  <label>Find CID Provider: </label>
+                  <input
+                    type='text'
+                    value={dhtFindProviderCid}
+                    onChange={(e) => setDhtFindProviderCid(e.target.value)}
+                  />
+
+                  <button onClick={() => handleDhtFindProvider(selectedContainer)}>Find Providers</button>
+                </div>
                 <div>
                   Find Providers results:
                   {peerData[selectedContainer]?.dhtFindProviderResult?.map((p, index) => (
