@@ -3,6 +3,7 @@
 build:
 	npm run build
 	docker build -t gossip:dev -f Dockerfile.gossip .
+	# docker build -t gossip:dev-23 -f Dockerfile.gossip-23 .
 	docker build -t bootstrapper:dev -f Dockerfile.bootstrapper .
 	docker build -t minimal:dev -f Dockerfile.minimal .
 	docker build -t minimal:debug -f Dockerfile.minimal.debug .

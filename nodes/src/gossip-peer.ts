@@ -8,6 +8,7 @@ import { webSockets } from '@libp2p/websockets'
 import * as filters from '@libp2p/websockets/filters'
 import { webTransport } from '@libp2p/webtransport'
 import { webRTC, webRTCDirect } from '@libp2p/webrtc'
+import { circuitRelayTransport } from '@libp2p/circuit-relay-v2'
 import { tcp } from '@libp2p/tcp'
 import { createLibp2p, Libp2pOptions } from 'libp2p'
 import { kadDHT, removePrivateAddressesMapper } from '@libp2p/kad-dht'
@@ -86,6 +87,11 @@ import { plaintext } from '@libp2p/plaintext'
     let encrypters = 'noise'
     if (process.env.DISABLE_NOISE !== undefined) {
       encrypters = 'plaintext'
+    }
+
+    let wantCircuitRelay = false
+    if (process.env.CIRCUIT_RELAY !== undefined) {
+      wantCircuitRelay = true
     }
 
     // Configure Libp2p
@@ -200,6 +206,17 @@ import { plaintext } from '@libp2p/plaintext'
       libp2pConfig.connectionEncrypters = [noise()]
     } else {
       libp2pConfig.connectionEncrypters = [plaintext()]
+    }
+
+    if (wantCircuitRelay) {
+      if (libp2pConfig.addresses && libp2pConfig.addresses.listen) {
+        libp2pConfig.addresses.listen.push('/p2p-circuit')
+      }
+
+      if (libp2pConfig.transports) {
+        libp2pConfig.transports.push(webRTC())
+        libp2pConfig.transports.push(circuitRelayTransport())
+      }
     }
 
     console.log('starting instance')

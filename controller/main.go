@@ -2,7 +2,6 @@ package main
 
 import (
 	"archive/tar"
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -46,7 +45,7 @@ var (
 
 	// Map to track frontend connections
 	clients   = make(map[*websocket.Conn]bool)
-	clientsMu sync.Mutex
+	clientsMu sync.RWMutex
 	upgrader  = websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
@@ -84,6 +83,25 @@ type ContainerWSReq struct {
 	MType   string `json:"mType"`
 	Message string `json:"message"`
 	Topic   string `json:"topic,omitempty"`
+}
+
+type prefixWriter struct {
+	prefix string
+	out    io.Writer
+}
+
+func (pw *prefixWriter) Write(p []byte) (int, error) {
+	parts := bytes.Split(p, []byte("\n"))
+	for i, line := range parts {
+		// skip the final empty trailing line if p ends with '\n'
+		if i == len(parts)-1 && len(line) == 0 {
+			continue
+		}
+		if _, err := fmt.Fprintf(pw.out, "[%s] %s\n", pw.prefix, line); err != nil {
+			return 0, err // on error, report it
+		}
+	}
+	return len(p), nil // signal that we've consumed all of p
 }
 
 func listContainers(ctx context.Context) ([]ContainerInfo, error) {
@@ -390,44 +408,62 @@ func createAndStartContainer(ctx context.Context, imageName, containerName strin
 		hostPort, _ = strconv.Atoi(portInfo[0].HostPort)
 	}
 
-	// Attempt to set container ID and start listening for updates
-	err = setContainerIDAndListen(hostPort, containerJSON.ID[:12])
-	if err != nil {
-		fmt.Printf("failed to set container id: %s, %s - stopping container\n", containerJSON.ID[:12], err)
+	go func(hostPort int, containerID string) {
+		err := setContainerIDAndListen(hostPort, containerID)
+		if err != nil {
+			fmt.Printf("failed to set container id: %s, %s - stopping container\n", containerJSON.ID[:12], err)
 
-		stopErr := stopContainer(ctx, resp.ID)
-		if stopErr != nil {
-			fmt.Printf("failed to stop container id: %s\n", containerJSON.ID[:12])
-			return "", 0, stopErr
+			stopErr := stopContainer(ctx, resp.ID)
+			if stopErr != nil {
+				fmt.Printf("failed to stop container id: %s %s\n", containerJSON.ID[:12], stopErr)
+			}
+		} else {
+			log.Printf("Set id for container %s", containerID)
 		}
-		return "", 0, err
-	}
+
+		go broadcastContainers()
+	}(hostPort, containerJSON.ID[:12])
 
 	// Broadcast after creation/start
-	go broadcastContainers()
 
 	return resp.ID, hostPort, nil
 }
 
 func setContainerIDAndListen(hostPort int, containerID string) error {
-	// over 5 seconds
-	const maxRetries = 250
-	const retryDelay = 20 * time.Millisecond
+	const (
+		baseDelay  = 20 * time.Millisecond // initial delay
+		maxDelay   = 2 * time.Second       // cap for backoff
+		maxElapsed = 15 * time.Second      // total timeout
+	)
+
+	// create a context that will be cancelled after maxElapsed
+	ctx, cancel := context.WithTimeout(context.Background(), maxElapsed)
+	defer cancel()
 
 	var lastErr error
-	for i := 1; i <= maxRetries; i++ {
+	backoff := baseDelay
+
+	for attempt := 1; ; attempt++ {
 		err := setContainerIDViaWebSocketAndListen(hostPort, containerID)
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		fmt.Printf("Attempt %d/%d failed to set container ID and listen: %v\n", i, maxRetries, err)
-		if i < maxRetries {
-			time.Sleep(retryDelay)
+		fmt.Printf("Attempt %d failed to set container ID %q and listen: %v\n", attempt, containerID, err)
+
+		// wait for either backoff timer or context timeout
+		select {
+		case <-ctx.Done():
+			// we've hit the 15s deadline
+			return fmt.Errorf("all attempts to set id failed after %s: %w", maxElapsed, lastErr)
+		case <-time.After(backoff):
+			// increment backoff for next iteration
+			backoff *= 2
+			if backoff > maxDelay {
+				backoff = maxDelay
+			}
 		}
 	}
-
-	return fmt.Errorf("all retries failed: %w", lastErr)
 }
 
 func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error {
@@ -529,8 +565,8 @@ func addTypeToMessage(msg []byte, msgType string) ([]byte, error) {
 // Container connection management
 func setContainerConn(containerID string, conn *websocket.Conn) {
 	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
 	containerConns[containerID] = conn
+	containerConnsMu.Unlock()
 }
 
 func closeContainerConn(containerID string) {
@@ -581,19 +617,17 @@ func startLogStreaming(containerID string) {
 	}
 	defer out.Close()
 
-	scanner := bufio.NewScanner(out)
-	for scanner.Scan() {
-		select {
-		case <-streamer.stopChan:
-			return
-		default:
-			line := scanner.Text()
-			fmt.Printf("[%s] %s\n", containerID[:12], line)
+	pw := &prefixWriter{prefix: containerID[:12], out: os.Stdout}
+
+	go func() {
+		_, err := stdcopy.StdCopy(pw, pw, out)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error demultiplexing logs for %s: %v\n", containerID, err)
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		fmt.Printf("Error reading logs for container %s: %v\n", containerID, err)
-	}
+	}()
+
+	// Wait for stop signal
+	<-streamer.stopChan
 }
 
 func stopLogStreaming(containerID string) {
@@ -820,8 +854,8 @@ func createContainerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func getRandomContainerConn() (string, *websocket.Conn) {
-	containerConnsMu.Lock()
-	defer containerConnsMu.Unlock()
+	containerConnsMu.RLock()
+	defer containerConnsMu.RUnlock()
 
 	if len(containerConns) == 0 {
 		return "", nil
@@ -920,11 +954,12 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		if reqBody.ContainerID != "" {
 			var ok bool
 			containerID = reqBody.ContainerID
-			containerConnsMu.Lock()
+			containerConnsMu.RLock()
 			{
 				c, ok = containerConns[containerID]
 			}
-			containerConnsMu.Unlock()
+			containerConnsMu.RUnlock()
+
 			if !ok {
 				http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 				return
@@ -983,11 +1018,11 @@ func connectHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %v", containerID), http.StatusInternalServerError)
 		return
@@ -1042,11 +1077,11 @@ func logHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container in conns id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
@@ -1110,11 +1145,11 @@ func tcpdumpStartHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
@@ -1173,11 +1208,11 @@ func tcpdumpStopHandler(w http.ResponseWriter, r *http.Request) {
 
 	var ok bool
 	containerID := reqBody.ContainerID
-	containerConnsMu.Lock()
+	containerConnsMu.RLock()
 	{
 		c, ok = containerConns[containerID]
 	}
-	containerConnsMu.Unlock()
+	containerConnsMu.RUnlock()
 	if !ok {
 		log.Printf("logHandler: Failed to find container id: %s", containerID)
 		http.Error(w, fmt.Sprintf("Failed to find container id: %s", containerID), http.StatusInternalServerError)
@@ -1237,6 +1272,131 @@ func tcpdumpStopHandler(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "pcap not found in archive", http.StatusInternalServerError)
 }
 
+// dhtProvideHandler
+func dhtProvideHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+		CID         string `json:"cid"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("dhtProvideHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("dhtProvideHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.RLock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.RUnlock()
+	if !ok {
+		log.Printf("dhtProvideHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("dhtProvideHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := &ContainerWSReq{
+		MType:   "dhtprovide",
+		Message: reqBody.CID,
+	}
+
+	msg, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'provide' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// dhtFindProviderHandler
+func dhtFindProviderHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+		CID         string `json:"cid"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("dhtFindProviderHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("dhtFindProvideHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.RLock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.RUnlock()
+	if !ok {
+		log.Printf("dhtFindProviderHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("dhtFindProviderHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := &ContainerWSReq{
+		MType:   "dhtfindprovider",
+		Message: reqBody.CID,
+	}
+
+	msg, err := json.Marshal(message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, msg); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'findprovider' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// wsHandler handles WebSocket connections
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade to websocket (clients)
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -1285,7 +1445,7 @@ func enableCors(next http.Handler) http.Handler {
 	})
 }
 
-func cleanup() {
+func cleanup(ctx context.Context) {
 	fmt.Println("Cleaning up started containers...")
 
 	logStreamersMu.Lock()
@@ -1297,24 +1457,26 @@ func cleanup() {
 	}
 	logStreamersMu.Unlock()
 
-	runningContainersMu.Lock()
-	defer runningContainersMu.Unlock()
-
 	for _, containerID := range runningContainers {
+		closeContainerConn(containerID) // Ensure connections are closed
 		fmt.Printf("Attempting to stop and remove container %s...\n", containerID)
 
+		runningContainersMu.Lock()
+		ctxTo, cancel := context.WithTimeout(ctx, 5*time.Second)
 		timeout := 1
 
-		if err := DockerClient.ContainerStop(context.Background(), containerID, container.StopOptions{Timeout: &timeout}); err != nil {
+		if err := DockerClient.ContainerStop(ctxTo, containerID, container.StopOptions{Timeout: &timeout}); err != nil {
 			fmt.Printf("Error stopping container %s: %v\n", containerID, err)
 		}
 
-		if err := DockerClient.ContainerRemove(context.Background(), containerID, container.RemoveOptions{}); err != nil {
+		if err := DockerClient.ContainerRemove(ctxTo, containerID, container.RemoveOptions{}); err != nil {
 			fmt.Printf("Error removing container %s: %v\n", containerID, err)
 		}
+		runningContainersMu.Unlock()
 
-		closeContainerConn(containerID) // Ensure connections are closed
+		cancel()
 	}
+
 	runningContainers = nil
 }
 
@@ -1427,6 +1589,8 @@ func main() {
 	mux.HandleFunc("POST /logs", logHandler)
 	mux.HandleFunc("POST /tcpdump/start", tcpdumpStartHandler)
 	mux.HandleFunc("POST /tcpdump/stop", tcpdumpStopHandler)
+	mux.HandleFunc("POST /dht/provide", dhtProvideHandler)
+	mux.HandleFunc("POST /dht/findprovider", dhtFindProviderHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)
@@ -1445,7 +1609,9 @@ func main() {
 
 	go func() {
 		<-c
-		cleanup()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		cleanup(ctx)
+		cancel()
 		os.Exit(0)
 	}()
 

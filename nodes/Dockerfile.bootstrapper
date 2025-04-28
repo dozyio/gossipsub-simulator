@@ -9,6 +9,7 @@ RUN apk add --no-cache iproute2 iptables tcpdump
 COPY package.json package-lock.json ./
 COPY src ./src
 COPY dist ./dist
+#COPY sysctl.conf /etc/sysctl.conf
 
 ## install deps so native binaries are in the correct format
 RUN npm ci

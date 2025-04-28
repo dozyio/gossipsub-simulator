@@ -1,7 +1,10 @@
 import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
 import { FaRegCircle } from 'react-icons/fa'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CID } from 'multiformats/cid'
+import { sha256 } from 'multiformats/hashes/sha2'
+import * as raw from 'multiformats/codecs/raw'
 
 interface PortMapping {
   ip: string
@@ -61,6 +64,8 @@ interface PeerData {
   meshPeersList: Record<string, string[]>
   fanoutList: Map<string, Set<string>>
   dhtPeers: string[]
+  dhtProvideStatus: string
+  dhtFindProviderResult: string[]
   connections: string[] // peer ids of connections
   remotePeers: RemotePeers
   protocols: string[]
@@ -81,7 +86,7 @@ interface PeerData {
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams'
 type ClickType = 'kill' | 'info' | 'connect' | 'connectTo'
 type HoverType = 'peerscore' | 'rtt'
-type MapView = 'circle' | 'graph'
+type MapView = 'circle' | 'graph' | 'canvas'
 type ControllerStatus = 'offline' | 'online' | 'connecting'
 
 const ENDPOINT = 'http://localhost:8080'
@@ -93,16 +98,22 @@ const DHT_PREFIX = '/ipfs/lan'
 const CONTAINER_WIDTH = 800
 const CONTAINER_HEIGHT = 800
 
+const centerX = CONTAINER_WIDTH / 2
+const centerY = CONTAINER_HEIGHT / 2
+const VELOCITY_THRESHOLD = 0.1
+const STABLE_ITERATIONS = 20
+const MAX_UNSTABLE_ITERATIONS = 15 * 30
+
 // Force strengths
 // Compound Spring Embedder layout
 const DEFAULT_FORCES = {
-  repulsion: 1_000, // Adjusted for CSE
-  attraction: 0.2, // Adjusted for CSE
+  repulsion: 50_000, // Adjusted for CSE
+  attraction: 0.09, // Adjusted for CSE
   collision: 100, // Adjusted for CSE
-  gravity: 0.05, // Central gravity strength
+  gravity: 0.2, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 40, // Maximum velocity cap
-  naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
@@ -139,7 +150,7 @@ export default function Home() {
   const [autoPublishInterval, setAutoPublishInterval] = useState<string>('1000')
   const [connectMultiaddr, setConnectMultiaddr] = useState<string>('')
 
-  // network config
+  // container config
   const [topicsName, setTopicsName] = useState<string>('pubXXX-dev')
   const [debugContainer, setDebugContainer] = useState<boolean>(false)
   const [debugStr, setDebugStr] = useState<string>(DEBUG_STRING)
@@ -153,12 +164,18 @@ export default function Home() {
   const [gossipDout, setGossipDout] = useState<string>('2')
   const [hasLatencySettings, setHasLatencySettings] = useState<boolean>(false)
   const [minLatency, setMinLatency] = useState<string>('20')
-  const [maxLatency, setMaxLatency] = useState<string>('200')
+  const [maxLatency, setMaxLatency] = useState<string>('50')
   const [hasPacketLossSetting, setHasPacketLossSettings] = useState<boolean>(false)
-  const [packetLoss, setPacketLoss] = useState<string>('5')
+  const [packetLoss, setPacketLoss] = useState<string>('1')
   const [hasPerfSetting, setHasPerfSetting] = useState<boolean>(false)
   const [perfBytes, setPerfBytes] = useState<string>('1')
   const [disableNoise, setDisableNoise] = useState<boolean>(false)
+  const [transportCircuitRelay, setTransportCircuitRelay] = useState<boolean>(false)
+
+  // dht stuff
+  const [dhtProvideString, setDhtProvideString] = useState<string>('')
+  const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
+  const [dhtFindProviderCid, setDhtFindProviderCid] = useState<string>('')
 
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
@@ -173,6 +190,14 @@ export default function Home() {
   const intervalIdRef = useRef<number | null>(null) // Store interval ID
   const [nodeSize, setNodeSize] = useState<number>(35)
   const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  // const nodesRef = useRef(allNodes)
+  // const edgesRef = useRef(edges)
+  const nodesRef = useRef<Record<string, { x: number; y: number; vx: number; vy: number }>>({})
+  const edgesRef = useRef<{ from: string; to: string }[]>([])
+  const rafIdRef = useRef<number | null>(null)
+  const fpsRef = useRef<HTMLDivElement | null>(null)
+  const frameTimesRef = useRef<number[]>([])
 
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
@@ -201,6 +226,8 @@ export default function Home() {
             meshPeersList: {},
             fanoutList: new Map<string, Set<string>>(),
             dhtPeers: [],
+            dhtProvideStatus: '',
+            dhtFindProviderResult: [],
             connections: [],
             remotePeers: {},
             protocols: [],
@@ -253,7 +280,8 @@ export default function Home() {
     }
   }
 
-  const envSetter = (env: string[] = [], isBootstrap: boolean = false): string[] => {
+  const envSetter = (baseEnv: string[] = [], isBootstrap: boolean = false): string[] => {
+    const env = [...baseEnv]
     env.push(`TOPICS=${topicsName}`)
 
     env.push(`DHTPREFIX=${dhtPrefix}`)
@@ -316,6 +344,10 @@ export default function Home() {
 
     if (disableNoise) {
       env.push('DISABLE_NOISE=1')
+    }
+
+    if (transportCircuitRelay) {
+      env.push('CIRCUIT_RELAY=1')
     }
 
     return env
@@ -588,6 +620,72 @@ export default function Home() {
     }
   }
 
+  const handleDhtProvide = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      cid: string
+      container_id?: string
+    }
+
+    const body: Body = {
+      cid: dhtCidOfString,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/provide`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error provide: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error provide:', error)
+    }
+  }
+
+  const handleDhtFindProvider = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      cid: string
+      container_id?: string
+    }
+
+    const body: Body = {
+      cid: dhtFindProviderCid,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/findprovider`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error provide: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error provide:', error)
+    }
+  }
+
   const showContainerInfo = (containerId: string): void => {
     console.log('Current containerData:', peerData)
 
@@ -834,6 +932,20 @@ export default function Home() {
     setSelectedTopics(topic)
   }
 
+  const handleDhtProvideString = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    setDhtProvideString(e.target.value)
+    const cid = CID.create(1, raw.code, await sha256.digest(new TextEncoder().encode(e.target.value)))
+    setDhtCidOfString(cid.toString())
+  }
+
+  const onCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const { offsetX: x, offsetY: y } = e.nativeEvent
+    const clicked = Object.entries(allNodes).find(
+      ([id, node]) => Math.hypot(node.x - x, node.y - y) < nodeSize / 2,
+    )?.[0]
+    if (clicked) handleContainerClick(clicked)
+  }
+
   const getBackgroundColor = (containerId: string): string => {
     if (converge) {
       return peerData[containerId]?.lastMessage
@@ -1020,6 +1132,13 @@ export default function Home() {
     return nodes
   }, [peerData, remotePeerData])
 
+  const activeRemotePeers = useMemo(() => {
+    return Object.entries(remotePeerData).filter(([peerId]) =>
+      // keep only those peerIds that show up in some container.remotePeers
+      Object.values(peerData).some((container) => Object.prototype.hasOwnProperty.call(container.remotePeers, peerId)),
+    )
+  }, [remotePeerData, peerData])
+
   // WebSocket for controller
   // Receives containers list and node updates
   useEffect(() => {
@@ -1116,7 +1235,6 @@ export default function Home() {
           break
         default:
           // connections, pubsubPeers, libp2pPeers, dhtPeers
-
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           if (Array.isArray((data as any)[mapType])) {
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1130,33 +1248,26 @@ export default function Home() {
         const targetCid = Object.keys(peerData).find((k) => peerData[k].peerId === peerId)
         if (targetCid) {
           newEdges.push({ from: containerId, to: targetCid })
-        }
-      })
-
-      // 2) container → remote via remotePeers if not assigned to a container
-      Object.keys(data.remotePeers || {}).forEach((remotePeerId) => {
-        if (!isPeerIdAssignedToContainer(remotePeerId)) {
-          newEdges.push({ from: containerId, to: remotePeerId })
+        } else {
+          // container → remote (because peerId isn’t in any container)
+          newEdges.push({ from: containerId, to: peerId })
         }
       })
     })
 
-    // 3) orphans via  remotePeerData links
-    Object.keys(remotePeerData).forEach((remotePeerId) => {
-      if (!isPeerIdAssignedToContainer(remotePeerId)) {
-        Object.entries(peerData).forEach(([containerId, data]) => {
-          if (data.remotePeers?.[remotePeerId]) {
-            newEdges.push({ from: containerId, to: remotePeerId })
-          }
-        })
+    const seen = new Set<string>()
+    const uniq: { from: string; to: string }[] = []
+
+    for (const { from, to } of newEdges) {
+      // sort endpoints so “A–B” and “B–A” both map to “A--B”
+      const [a, b] = [from, to].sort()
+      const key = `${a}--${b}`
+
+      if (!seen.has(key)) {
+        seen.add(key)
+        uniq.push({ from, to })
       }
-    })
-
-    // dedupe on unordered pairs
-    const uniq = newEdges.filter(
-      (e, i) =>
-        newEdges.findIndex((f) => (f.from === e.from && f.to === e.to) || (f.from === e.to && f.to === e.from)) === i,
-    )
+    }
 
     if (
       uniq.length !== prevEdgesRef.current.length ||
@@ -1164,7 +1275,7 @@ export default function Home() {
     ) {
       prevEdgesRef.current = uniq
       setEdges(uniq)
-      console.log('Updated edges:', uniq)
+      // console.log('Updated edges:', uniq)
     }
   }, [peerData, remotePeerData, mapType, selectedTopic])
 
@@ -1205,157 +1316,407 @@ export default function Home() {
   //   setMinDistance(distance)
   // }, [containers, nodeSize])
 
-  // Compound Spring Embedder Force-Directed Layout Implementation
   useEffect(() => {
-    if (mapView !== 'graph') return
+    nodesRef.current = allNodes
+  }, [allNodes])
 
-    const centerX = CONTAINER_WIDTH / 2
-    const centerY = CONTAINER_HEIGHT / 2
-    const VELOCITY_THRESHOLD = 1
-    const STABLE_ITERATIONS = 20
-    const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
+  useEffect(() => {
+    edgesRef.current = edges
+  }, [edges])
 
-    const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-    if (edgesChanged) {
-      stableCountRef.current = 0
-      unstableCountRef.current = 0
+  const stepSimulation = useCallback(() => {
+    let allStable = true
+    const updated = { ...nodesRef.current }
 
-      stabilizedRef.current = false
-      prevEdgesRef.current = edges
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-    }
+    Object.entries(updated).forEach(([id, node]) => {
+      let fx = 0,
+        fy = 0
 
-    intervalIdRef.current = window.setInterval(() => {
-      if (stabilizedRef.current && intervalIdRef.current) {
-        window.clearInterval(intervalIdRef.current)
-        return
+      // 1) check stability
+      if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+        allStable = false
+        stableCountRef.current = 0
       }
 
-      let allStable = true
-      // Clone positions & velocities
-      const updated = { ...allNodes }
-
-      // Compute forces for each nodeId in allNodes
-      Object.entries(updated).forEach(([id, node]) => {
-        let fx = 0
-        let fy = 0
-        // stability
-        if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-          // console.log('id unstable', id)
-          allStable = false
-          stableCountRef.current = 0
-        }
-
-        // 1. Repulsion among all nodes
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          let dist = Math.sqrt(dx * dx + dy * dy) || 1
+      // 2) repulsion
+      try {
+        Object.values(updated).forEach((other) => {
+          if (other === node) return
+          const dx = node.x - other.x,
+            dy = node.y - other.y
+          let dist = Math.hypot(dx, dy) || 1
           dist = Math.max(dist, nodeSize)
           const rep = mapTypeForces[mapType].repulsion / (dist * dist)
           fx += (dx / dist) * rep
           fy += (dy / dist) * rep
         })
+      } catch (err: any) {
+        console.error('Error applying repulsion force:', err)
+      }
 
-        // 2. Attraction along edges
-        edges.forEach((e) => {
+      // 3) attraction
+      try {
+        edgesRef.current.forEach((e) => {
           if (e.from === id || e.to === id) {
-            const otherId = e.from === id ? e.to : e.from
-            const other = updated[otherId]
-            if (!other) return
-            const dx = other.x - node.x
-            const dy = other.y - node.y
-            const dist = Math.sqrt(dx * dx + dy * dy) || 1
+            const other = updated[e.from === id ? e.to : e.from]
+            const dx = other.x - node.x,
+              dy = other.y - node.y
+            const dist = Math.hypot(dx, dy) || 1
             const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
             fx += (dx / dist) * attr
             fy += (dy / dist) * attr
           }
         })
-
-        // 3. Central gravity
-        fx += (centerX - node.x) * mapTypeForces[mapType].gravity
-        fy += (centerY - node.y) * mapTypeForces[mapType].gravity
-
-        // 4. Collision
-        Object.entries(updated).forEach(([oid, other]) => {
-          if (id === oid) return
-          const dx = node.x - other.x
-          const dy = node.y - other.y
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1
-          if (dist < minDistance) {
-            const overlap = minDistance - dist
-            const col = (overlap / dist) * mapTypeForces[mapType].collision
-            fx += (dx / dist) * col
-            fy += (dy / dist) * col
-          }
-        })
-
-        // 5. Damping
-        node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-        node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-
-        // 6. Cap velocity
-        node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-        node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-
-        // 7. Update pos
-        node.x += node.vx
-        node.y += node.vy
-
-        // 8. Boundaries
-        node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-        node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-      })
-
-      // Separate updates back to states
-      // Containers
-      setPeerData((prev) => {
-        const next = { ...prev }
-        Object.entries(prev).forEach(([cid]) => {
-          const u = updated[cid]
-          if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-        })
-        return next
-      })
-
-      // Remotes
-      setRemotePeerData((prev) => {
-        const next: RemotePeers = { ...prev }
-        Object.keys(prev).forEach((rid) => {
-          if (isRemotePeerConnectedToContainer(rid)) {
-            const u = updated[rid]
-            if (u) {
-              next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-            }
-          }
-        })
-        return next
-      })
-
-      // stability
-      if (allStable) {
-        stableCountRef.current += 1
-        if (stableCountRef.current >= STABLE_ITERATIONS) {
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
-      } else {
-        stableCountRef.current = 0
-        unstableCountRef.current += 1
-        if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
-          stableCountRef.current = STABLE_ITERATIONS
-          allStable = true
-          stabilizedRef.current = true
-          if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-        }
+      } catch (err: any) {
+        console.error('Error applying attraction force:', err)
       }
-    }, 30)
+
+      // 4) central gravity
+      fx += (centerX - node.x) * mapTypeForces[mapType].gravity
+      fy += (centerY - node.y) * mapTypeForces[mapType].gravity
+
+      // 5) collision
+      Object.values(updated).forEach((other) => {
+        if (other === node) return
+        const dx = node.x - other.x,
+          dy = node.y - other.y
+        const dist = Math.hypot(dx, dy) || 1
+        if (dist < minDistance) {
+          const overlap = minDistance - dist
+          const col = (overlap / dist) * mapTypeForces[mapType].collision
+          fx += (dx / dist) * col
+          fy += (dy / dist) * col
+        }
+      })
+
+      // 6) damping + cap + integrate
+      node.vx = Math.max(
+        -mapTypeForces[mapType].maxVelocity,
+        Math.min(mapTypeForces[mapType].maxVelocity, (node.vx + fx) * mapTypeForces[mapType].damping),
+      )
+      node.vy = Math.max(
+        -mapTypeForces[mapType].maxVelocity,
+        Math.min(mapTypeForces[mapType].maxVelocity, (node.vy + fy) * mapTypeForces[mapType].damping),
+      )
+
+      node.x = Math.min(CONTAINER_WIDTH - nodeSize / 2, Math.max(nodeSize / 2, node.x + node.vx))
+      node.y = Math.min(CONTAINER_HEIGHT - nodeSize / 2, Math.max(nodeSize / 2, node.y + node.vy))
+    })
+
+    // push back into React state:
+    setPeerData((prev) => {
+      const next = { ...prev }
+      Object.keys(prev).forEach((cid) => {
+        const u = updated[cid]
+        if (u) next[cid] = { ...next[cid], ...u }
+      })
+      return next
+    })
+
+    setRemotePeerData((prev) => {
+      const next = { ...prev }
+      Object.keys(prev).forEach((rid) => {
+        if (isRemotePeerConnectedToContainer(rid)) {
+          const u = updated[rid]
+          if (u) next[rid] = { ...next[rid], ...u }
+        }
+      })
+      return next
+    })
+
+    // track convergence / bail-out
+    if (allStable) {
+      stableCountRef.current += 1
+      if (stableCountRef.current >= STABLE_ITERATIONS) stabilizedRef.current = true
+    } else {
+      unstableCountRef.current += 1
+      if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+        stabilizedRef.current = true
+      }
+    }
+  }, [mapType, nodeSize, minDistance])
+
+  // The rAF‐driven effect
+  useEffect(() => {
+    if (mapView !== 'graph' && mapView !== 'canvas') return
+
+    // reset our counters whenever edges/mapType/view changes
+    frameTimesRef.current = []
+    stableCountRef.current = 0
+    unstableCountRef.current = 0
+    stabilizedRef.current = false
+
+    // clear any prior frame
+    if (rafIdRef.current) {
+      cancelAnimationFrame(rafIdRef.current)
+    }
+
+    const loop = () => {
+      // const times = frameTimesRef.current
+      // times.push(timestamp)
+      // // drop anything older than 1 s
+      // const cutoff = timestamp - 1000
+      // while (times.length && times[0] < cutoff) times.shift()
+      // // fps = number of frames in last second
+      // if (fpsRef.current) fpsRef.current.textContent = `${times.length} FPS`
+      stepSimulation()
+      if (!stabilizedRef.current) {
+        rafIdRef.current = requestAnimationFrame(loop)
+      }
+    }
+
+    // kick it off
+    rafIdRef.current = requestAnimationFrame(loop)
 
     return () => {
-      if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current)
+      }
     }
-  }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
+  }, [mapView, mapType, stepSimulation, edges])
+
+  useEffect(() => {
+    let rafId: number
+    let last = performance.now()
+    const deltas: number[] = []
+    const maxSamples = 60 // average over last 60 frames (~1s)
+
+    const fpsLoop = (now: number) => {
+      // 1) compute delta
+      const delta = now - last
+      last = now
+
+      // 2) push & trim
+      deltas.push(delta)
+      if (deltas.length > maxSamples) deltas.shift()
+
+      // 3) compute average delta & FPS
+      const avgDelta = deltas.reduce((a, b) => a + b, 0) / deltas.length
+      const fps = 1000 / avgDelta
+
+      // 4) write into DOM once (no React state)
+      if (fpsRef.current) fpsRef.current.textContent = `${fps.toFixed(1)} FPS`
+
+      // 5) next tick
+      rafId = requestAnimationFrame(fpsLoop)
+    }
+
+    // kick it off
+    rafId = requestAnimationFrame((t) => {
+      last = t
+      fpsLoop(t)
+    })
+
+    return () => cancelAnimationFrame(rafId)
+  }, []) // run once on mount
+
+  // // Compound Spring Embedder Force-Directed Layout Implementation
+  // useEffect(() => {
+  //   if (mapView !== 'graph' && mapView !== 'canvas') return
+  //
+  //   const centerX = CONTAINER_WIDTH / 2
+  //   const centerY = CONTAINER_HEIGHT / 2
+  //   const VELOCITY_THRESHOLD = 1
+  //   const STABLE_ITERATIONS = 20
+  //   const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
+  //
+  //   const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
+  //   if (edgesChanged) {
+  //     stableCountRef.current = 0
+  //     unstableCountRef.current = 0
+  //
+  //     stabilizedRef.current = false
+  //     prevEdgesRef.current = edges
+  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //   }
+  //
+  //   intervalIdRef.current = window.setInterval(() => {
+  //     if (stabilizedRef.current && intervalIdRef.current) {
+  //       window.clearInterval(intervalIdRef.current)
+  //       return
+  //     }
+  //
+  //     let allStable = true
+  //     // Clone positions & velocities
+  //     const updated = { ...allNodes }
+  //
+  //     // Compute forces for each nodeId in allNodes
+  //     Object.entries(updated).forEach(([id, node]) => {
+  //       let fx = 0
+  //       let fy = 0
+  //       // stability
+  //       if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
+  //         // console.log('id unstable', id)
+  //         allStable = false
+  //         stableCountRef.current = 0
+  //       }
+  //
+  //       // 1. Repulsion among all nodes
+  //       Object.entries(updated).forEach(([oid, other]) => {
+  //         if (id === oid) return
+  //         const dx = node.x - other.x
+  //         const dy = node.y - other.y
+  //         let dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //         dist = Math.max(dist, nodeSize)
+  //         const rep = mapTypeForces[mapType].repulsion / (dist * dist)
+  //         fx += (dx / dist) * rep
+  //         fy += (dy / dist) * rep
+  //       })
+  //
+  //       // 2. Attraction along edges
+  //       edges.forEach((e) => {
+  //         if (e.from === id || e.to === id) {
+  //           const otherId = e.from === id ? e.to : e.from
+  //           const other = updated[otherId]
+  //           if (!other) return
+  //           const dx = other.x - node.x
+  //           const dy = other.y - node.y
+  //           const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //           const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
+  //           fx += (dx / dist) * attr
+  //           fy += (dy / dist) * attr
+  //         }
+  //       })
+  //
+  //       // 3. Central gravity
+  //       fx += (centerX - node.x) * mapTypeForces[mapType].gravity
+  //       fy += (centerY - node.y) * mapTypeForces[mapType].gravity
+  //
+  //       // 4. Collision
+  //       Object.entries(updated).forEach(([oid, other]) => {
+  //         if (id === oid) return
+  //         const dx = node.x - other.x
+  //         const dy = node.y - other.y
+  //         const dist = Math.sqrt(dx * dx + dy * dy) || 1
+  //         if (dist < minDistance) {
+  //           const overlap = minDistance - dist
+  //           const col = (overlap / dist) * mapTypeForces[mapType].collision
+  //           fx += (dx / dist) * col
+  //           fy += (dy / dist) * col
+  //         }
+  //       })
+  //
+  //       // 5. Damping
+  //       node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
+  //       node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
+  //
+  //       // 6. Cap velocity
+  //       node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
+  //       node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
+  //
+  //       // 7. Update pos
+  //       node.x += node.vx
+  //       node.y += node.vy
+  //
+  //       // 8. Boundaries
+  //       node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
+  //       node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
+  //     })
+  //
+  //     // Separate updates back to states
+  //     // Containers
+  //     setPeerData((prev) => {
+  //       const next = { ...prev }
+  //       Object.entries(prev).forEach(([cid]) => {
+  //         const u = updated[cid]
+  //         if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+  //       })
+  //       return next
+  //     })
+  //
+  //     // Remotes
+  //     setRemotePeerData((prev) => {
+  //       const next: RemotePeers = { ...prev }
+  //       Object.keys(prev).forEach((rid) => {
+  //         if (isRemotePeerConnectedToContainer(rid)) {
+  //           const u = updated[rid]
+  //           if (u) {
+  //             next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
+  //           }
+  //         }
+  //       })
+  //       return next
+  //     })
+  //
+  //     // stability
+  //     if (allStable) {
+  //       stableCountRef.current += 1
+  //       if (stableCountRef.current >= STABLE_ITERATIONS) {
+  //         stabilizedRef.current = true
+  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //       }
+  //     } else {
+  //       stableCountRef.current = 0
+  //       unstableCountRef.current += 1
+  //       if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
+  //         stableCountRef.current = STABLE_ITERATIONS
+  //         allStable = true
+  //         stabilizedRef.current = true
+  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //       }
+  //     }
+  //   }, 30)
+  //
+  //   return () => {
+  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
+  //   }
+  // }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
+
+  useEffect(() => {
+    if (mapView !== 'canvas') return
+
+    const canvas = canvasRef.current
+    if (!canvas) return
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+
+    // clear
+    ctx.clearRect(0, 0, CONTAINER_WIDTH, CONTAINER_HEIGHT)
+
+    // draw edges
+    ctx.lineWidth = 2
+    edges.forEach(({ from, to }) => {
+      const a = allNodes[from]
+      const b = allNodes[to]
+      if (!a || !b) return
+
+      ctx.strokeStyle = '#aaa'
+      ctx.beginPath()
+      ctx.moveTo(a.x, a.y)
+      ctx.lineTo(b.x, b.y)
+      ctx.stroke()
+    })
+
+    // draw nodes
+    Object.entries(allNodes).forEach(([id, node]) => {
+      // Circle
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, nodeSize / 2, 0, Math.PI * 2)
+      ctx.fillStyle =
+        id in peerData
+          ? getBackgroundColor(id) // container color
+          : 'darkorange' // remote peer color
+      ctx.fill()
+
+      // optional border
+      if (selectedContainer === id) {
+        ctx.lineWidth = 2
+        ctx.strokeStyle = 'white'
+        ctx.stroke()
+      }
+
+      // label
+      const label = getLabel(id)
+      if (label) {
+        ctx.fillStyle = 'white'
+        ctx.font = `${Math.max(8, nodeSize / 3)}px sans-serif`
+        ctx.textAlign = 'center'
+        ctx.textBaseline = 'middle'
+        ctx.fillText(label, node.x, node.y)
+      }
+    })
+  }, [allNodes, edges, selectedContainer, nodeSize, mapView])
 
   // Auto publish if enabled
   useEffect(() => {
@@ -1458,7 +1819,7 @@ export default function Home() {
                 checked={hasGossipDSettings}
                 onChange={() => setHasGossipDSettings(!hasGossipDSettings)}
               />
-              <span style={{ marginLeft: '5px' }}>Gossip D Settings (not bootstrappers)</span>
+              <span style={{ marginLeft: '5px' }}>Gossip D Settings (gossip peers only)</span>
             </label>
           </div>
           {hasGossipDSettings && (
@@ -1508,7 +1869,7 @@ export default function Home() {
           <div className='input-group'>
             <label>
               <input type='checkbox' checked={disableNoise} onChange={() => setDisableNoise(!disableNoise)} />
-              <span style={{ marginLeft: '5px' }}>Disable Noise</span>
+              <span style={{ marginLeft: '5px' }}>Disable Noise (tcpdump)</span>
             </label>
           </div>
           <div className='input-group'>
@@ -1525,6 +1886,7 @@ export default function Home() {
                 onChange={() => {
                   setDhtAllowPrivate(!dhtAllowPrivate)
                   setDhtAllowPublic(dhtAllowPrivate)
+                  if (dhtPrefix === '/ipfs') setDhtPrefix('/ipfs/lan')
                 }}
               />
               <span style={{ marginLeft: '5px' }}>DHT Allow Private Addr</span>
@@ -1538,9 +1900,22 @@ export default function Home() {
                 onChange={() => {
                   setDhtAllowPublic(!dhtAllowPublic)
                   setDhtAllowPrivate(dhtAllowPublic)
+                  if (dhtPrefix === '/ipfs/lan') setDhtPrefix('/ipfs')
                 }}
               />
               <span style={{ marginLeft: '5px' }}>DHT Allow Public Addr</span>
+            </label>
+          </div>
+          <div className='input-group'>
+            <label>
+              <input
+                type='checkbox'
+                checked={transportCircuitRelay}
+                onChange={() => {
+                  setTransportCircuitRelay(!transportCircuitRelay)
+                }}
+              />
+              <span style={{ marginLeft: '5px' }}>Circuit relay (gossip peers only)</span>
             </label>
           </div>
 
@@ -1621,9 +1996,6 @@ export default function Home() {
                 )}
               </div>
             )}
-            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>
-              Pubsub Peer Store
-            </button>
             <button onClick={() => setMapType('streams')} className={mapType === 'streams' ? 'selected' : ''}>
               Streams
             </button>
@@ -1660,6 +2032,9 @@ export default function Home() {
                 )}
               </div>
             )}
+            <button onClick={() => setMapType('pubsubPeers')} className={mapType === 'pubsubPeers' ? 'selected' : ''}>
+              Pubsub Peer Store
+            </button>
             <button onClick={() => setMapType('libp2pPeers')} className={mapType === 'libp2pPeers' ? 'selected' : ''}>
               Libp2p Peer Store
             </button>
@@ -1671,6 +2046,23 @@ export default function Home() {
 
         {/* Middle Section: Graph */}
         <div className='middle'>
+          <div
+            ref={fpsRef}
+            style={{
+              position: 'absolute',
+              bottom: '8px',
+              right: '8px',
+              padding: '4px 8px',
+              background: 'rgba(0,0,0,0.6)',
+              color: 'white',
+              fontFamily: 'monospace',
+              fontSize: '12px',
+              borderRadius: '4px',
+              zIndex: 1000,
+            }}
+          >
+            — FPS —
+          </div>
           {controllerStatus === 'connecting' && (
             <div
               style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'green', fontSize: '20px' }}
@@ -1690,6 +2082,7 @@ export default function Home() {
               <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
 
               <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
+              {/* FPS Overlay */}
             </div>
           )}
           <div
@@ -1795,7 +2188,7 @@ export default function Home() {
                           '/ipfs/ping/1.0.0': '#000ff0',
                           // Add more protocols and their corresponding colors here
                         }
-                        strokeColor = protocolColorMap[connectionProtocol] || '#000000'
+                        strokeColor = protocolColorMap[connectionProtocol] || '#f0f0f0'
                       } else {
                         // For connections without a protocol, use default coloring
                         strokeColor = `#${conn.from.substring(0, 6)}`
@@ -1859,7 +2252,7 @@ export default function Home() {
                   )
                 })}
 
-                {Object.keys(remotePeerData).map((k) => {
+                {/* {Object.keys(remotePeerData).map((k) => {
                   // eslint-disable-next-line @typescript-eslint/no-unused-vars
                   for (const [_, containerDetails] of Object.entries(peerData)) {
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -1898,10 +2291,54 @@ export default function Home() {
                       }
                     }
                   }
-                })}
+                })} */}
+                {activeRemotePeers.map(([peerId, peer]) => (
+                  <div
+                    key={peerId}
+                    ref={(el) => {
+                      remotePeerRefs.current[peerId] = el
+                    }}
+                    className='container remotepeer'
+                    onClick={() => handleRemotePeerClick(peerId)}
+                    style={{
+                      width: `${nodeSize}px`,
+                      height: `${nodeSize}px`,
+                      lineHeight: `${nodeSize}px`,
+                      left: `${remotePeerData[peerId].x}px`,
+                      top: `${remotePeerData[peerId].y}px`,
+                      fontSize: `${Math.max(8, nodeSize / 3)}px`,
+                      backgroundColor: `darkorange`, //`${getBackgroundColor(container.id)}`,
+                      // opacity: 1, // `${getOpacity(container.id)}`,
+                      // border: `${getBorderStyle(container.id)}`,
+                      // borderRadius: `${getBorderRadius(container.id)}`,
+                      position: 'absolute',
+                      transform: `translate(-50%, -50%)`, // Center the node
+                      transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                    }}
+                    title={`Remote Peer\nPeer ID: ${peerId}`}
+                  >
+                    {peerId}
+                  </div>
+                ))}
               </div>
             )}
-
+            {mapView === 'canvas' && (
+              <canvas
+                ref={canvasRef}
+                width={CONTAINER_WIDTH}
+                height={CONTAINER_HEIGHT}
+                onClick={onCanvasClick}
+                onMouseMove={(e) => {
+                  const { offsetX: x, offsetY: y } = e.nativeEvent
+                  const over =
+                    Object.entries(allNodes).find(
+                      ([id, node]) => Math.hypot(node.x - x, node.y - y) < nodeSize / 2,
+                    )?.[0] || null
+                  setHoveredContainerId(over)
+                }}
+                style={{ cursor: 'pointer' }}
+              />
+            )}
             {mapView === 'circle' && (
               <div>
                 <svg className='edges'>
@@ -2082,57 +2519,132 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {remotePeerData[selectedRemotePeer]?.protocols?.map((p, index) => (
-                  <p key={index} style={{ marginLeft: '1rem' }}>
+                  <p key={index}>
+                    &bull;{'\u00A0'}
                     {p}
                   </p>
                 ))}
               </div>
               <div>
-                Multiaddrs: {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+                Multiaddrs:{' '}
+                {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => (
+                  <p key={index}>
+                    &bull;{'\u00A0'}
+                    {p}
+                  </p>
+                ))}
               </div>
-              <div>x: {remotePeerData[selectedRemotePeer].x}</div>
-              <div>y: {remotePeerData[selectedRemotePeer].y}</div>
-              <div>xv: {remotePeerData[selectedRemotePeer].vx}</div>
-              <div>yv: {remotePeerData[selectedRemotePeer].vy}</div>
             </div>
           )}
           {selectedContainer && peerData[selectedContainer] && (
             <div>
-              <h3>Peer Info</h3>
-
+              <h3>Gossip</h3>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
                 <button onClick={() => publishToTopic(selectedContainer, 1)}>Publish 1</button>
                 <button onClick={() => publishToTopic(selectedContainer, 1_000)}>Publish 1k</button>
                 <button onClick={() => publishToTopic(selectedContainer, 100_000)}>Publish 100k</button>
-                <div className='input-group'>
-                  <label>
-                    Connect to multiaddr:
-                    <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
-                  </label>
-                </div>
-                <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Connect</button>
-                <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
-                  Stop
-                </button>
-                <button onClick={() => getLogs(selectedContainer)}>Logs</button>
-                {!peerData[selectedContainer].tcpdumping && (
-                  <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
-                )}
-                {peerData[selectedContainer].tcpdumping && (
-                  <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
-                )}
               </div>
+              <h3>DHT Commands</h3>
+
+              <div className='input-group'>
+                <label>
+                  Provide: <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
+                </label>
+                <p>
+                  CID: <span style={{ userSelect: 'text' }}>{dhtCidOfString}</span>
+                </p>
+                <p>Provide status: {peerData[selectedContainer].dhtProvideStatus}</p>
+                <button onClick={() => handleDhtProvide(selectedContainer)}>Provide</button>
+              </div>
+              <div>
+                Find CID Provider:{' '}
+                <input type='text' value={dhtFindProviderCid} onChange={(e) => setDhtFindProviderCid(e.target.value)} />
+                <button onClick={() => handleDhtFindProvider(selectedContainer)}>Find Providers</button>
+                <div>
+                  Find Providers results:
+                  {peerData[selectedContainer]?.dhtFindProviderResult?.map((p, index) => (
+                    <p key={index}>
+                      &bull;{'\u00A0'}
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
+              <h3>Connect</h3>
+              <div className='input-group'>
+                <label>
+                  Connect to multiaddr:
+                  <div style={{ display: 'flex' }}>
+                    <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
+                    <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Go</button>
+                  </div>
+                </label>
+              </div>
+              <div className='input-group'>
+                <label>
+                  Dial public bootrapper:
+                  <div style={{ display: 'flex', gap: '0px 15px' }}>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN',
+                        )
+                      }
+                    >
+                      Qm..GAJN
+                    </button>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa',
+                        )
+                      }
+                    >
+                      Qm..uLTa
+                    </button>
+                  </div>
+                  <div style={{ display: 'flex', gap: '0px 15px' }}>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb',
+                        )
+                      }
+                    >
+                      Qm..75Nb
+                    </button>
+                    <button
+                      onClick={() =>
+                        connectTo(
+                          selectedContainer,
+                          '/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt',
+                        )
+                      }
+                    >
+                      Qm..3dwt
+                    </button>
+                  </div>
+                </label>
+              </div>
+              <button onClick={() => stopContainer(selectedContainer)} style={{ backgroundColor: '#e62020' }}>
+                Stop
+              </button>
+              <button onClick={() => getLogs(selectedContainer)}>Logs</button>
+              {!peerData[selectedContainer].tcpdumping && (
+                <button onClick={() => startTCPDump(selectedContainer)}>Start TCPDump</button>
+              )}
+              {peerData[selectedContainer].tcpdumping && (
+                <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
+              )}
+              <h3>Peer Info</h3>
               <div>Container ID: {selectedContainer}</div>
+              <p>Docker connect: docker exec -it {selectedContainer} /bin/sh</p>
               <p>Type: {peerData[selectedContainer]?.type}</p>
               <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
-              <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
-              <div>
-                {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
-                  <p key={rpid} style={{ marginLeft: '1rem' }}>
-                    {peerData[selectedContainer].remotePeers[rpid].multiaddrs}
-                  </p>
-                ))}
-              </div>
               <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
               <div>Mesh Peers:</div>
               {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
@@ -2174,13 +2686,29 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {peerData[selectedContainer]?.protocols?.map((p, index) => (
-                  <p key={index} style={{ marginLeft: '1rem' }}>
+                  <p key={index}>
+                    &bull;{'\u00A0'}
                     {p}
                   </p>
                 ))}
               </div>
               <div>
-                Multiaddrs: {peerData[selectedContainer]?.multiaddrs?.map((p, index) => <p key={index}>{p}</p>)}
+                Multiaddrs:{' '}
+                {peerData[selectedContainer]?.multiaddrs?.map((p, index) => (
+                  <p key={index}>
+                    &bull;{'\u00A0'}
+                    {p}
+                  </p>
+                ))}
+              </div>
+              <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
+              <div>
+                {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
+                  <p key={rpid} style={{ marginLeft: '1rem' }}>
+                    &bull;{'\u00A0'}
+                    {rpid}
+                  </p>
+                ))}
               </div>
             </div>
           )}
