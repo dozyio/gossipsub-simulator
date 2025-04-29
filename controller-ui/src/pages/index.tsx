@@ -87,7 +87,7 @@ interface PeerData {
 
 type MapType = 'pubsubPeers' | 'libp2pPeers' | 'meshPeers' | 'dhtPeers' | 'subscribers' | 'connections' | 'streams'
 type ClickType = 'kill' | 'info' | 'connect' | 'connectTo'
-type HoverType = 'peerscore' | 'rtt'
+type HoverType = 'peerscore' | 'rtt' | 'messagecount'
 type MapView = 'circle' | 'graph' | 'canvas'
 type ControllerStatus = 'offline' | 'online' | 'connecting'
 
@@ -869,6 +869,13 @@ export default function Home() {
           if (rtt !== undefined) {
             label = String(rtt) // Use rtt for label
           }
+        } else if (hoverType === 'messagecount') {
+          const messageCount = node?.messageCount
+          if (messageCount !== undefined) {
+            label = String(messageCount)
+          } else {
+            label = String(-1)
+          }
         }
         // }
       }
@@ -942,6 +949,8 @@ export default function Home() {
   const handleHoverType = (): void => {
     if (hoverType === 'peerscore') {
       setHoverType('rtt')
+    } else if (hoverType === 'rtt') {
+      setHoverType('messagecount')
     } else {
       setHoverType('peerscore')
     }
@@ -2566,7 +2575,7 @@ export default function Home() {
                     <span>ms</span>
                   </>
                 )}
-                {!converged && <>waiting...</>}
+                {!converged && trackConverge && <>waiting...</>}
               </p>
 
               <h3>DHT Commands</h3>
