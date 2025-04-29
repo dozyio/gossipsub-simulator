@@ -1,6 +1,6 @@
 import Head from 'next/head'
 import { FaCircleNodes } from 'react-icons/fa6'
-import { FaRegCircle } from 'react-icons/fa'
+import { FaPause, FaPlay, FaRegCircle } from 'react-icons/fa'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CID } from 'multiformats/cid'
 import { sha256 } from 'multiformats/hashes/sha2'
@@ -111,11 +111,11 @@ const MAX_UNSTABLE_ITERATIONS = 15 * 30
 const DEFAULT_FORCES = {
   repulsion: 50_000, // Adjusted for CSE
   attraction: 0.09, // Adjusted for CSE
-  collision: 100, // Adjusted for CSE
+  collision: 10, // Adjusted for CSE
   gravity: 0.2, // Central gravity strength
   damping: 0.1, // Velocity damping factor
   maxVelocity: 40, // Maximum velocity cap
-  naturalLength: 80, // Natural length for springs (ideal distance between connected nodes)
+  naturalLength: 100, // Natural length for springs (ideal distance between connected nodes)
 }
 
 const mapTypeForces = {
@@ -197,8 +197,8 @@ export default function Home() {
   const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
   const intervalIdRef = useRef<number | null>(null) // Store interval ID
-  const [nodeSize, setNodeSize] = useState<number>(35)
-  const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
+  // const [nodeSize, setNodeSize] = useState<number>(35)
+  // const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // const nodesRef = useRef(allNodes)
   // const edgesRef = useRef(edges)
@@ -207,6 +207,7 @@ export default function Home() {
   const rafIdRef = useRef<number | null>(null)
   const fpsRef = useRef<HTMLDivElement | null>(null)
   const frameTimesRef = useRef<number[]>([])
+  const [pauseSim, setPauseSim] = useState<boolean>(false)
 
   // controller websocket stuff
   const wsRef = useRef<WebSocket | null>(null)
@@ -1331,42 +1332,39 @@ export default function Home() {
     }
   }, [peerData, remotePeerData, mapType, selectedTopic])
 
-  // // Update node size based on number of containers
-  // useEffect(() => {
-  //   const minSize = 35 // Minimum node size
-  //   const maxSize = 45 // Maximum node size
-  //   const scalingFactor = 5 // Adjust this to control sensitivity
-  //
-  //   if (containers.length === 0) {
-  //     setNodeSize(maxSize) // Default size when no containers
-  //     return
-  //   }
-  //
-  //   // Dynamically scale the node size
-  //   const size = Math.max(minSize, Math.min(maxSize, maxSize - Math.log(containers.length) * scalingFactor))
-  //
-  //   setNodeSize(size)
-  // }, [containers])
+  // Update node size based on number of containers
+  const nodeSize = useMemo(() => {
+    const minSize = 15
+    const maxSize = 35
+    const scalingFactor = 2.3
+    const total = Object.keys(peerData).length + Object.keys(remotePeerData).length
+
+    if (total <= 10) return maxSize
+
+    return Math.max(minSize, Math.min(maxSize, maxSize - Math.log(total) * scalingFactor))
+  }, [peerData, remotePeerData])
 
   // Update min distance
-  // useEffect(() => {
-  //   const minDistanceMin = nodeSize * 2 // Minimum allowable distance
-  //   const minDistanceMax = nodeSize * 4 // Maximum allowable distance
-  //   const scalingFactor = 1 // Adjust for sensitivity
-  //
-  //   if (containers.length === 0) {
-  //     setMinDistance(minDistanceMax) // Default when no containers
-  //     return
-  //   }
-  //
-  //   // Dynamically scale the minDistance
-  //   const distance = Math.max(
-  //     minDistanceMin,
-  //     Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
-  //   )
-  //
-  //   setMinDistance(distance)
-  // }, [containers, nodeSize])
+  const minDistance = useMemo(() => {
+    const minDistanceMin = nodeSize * 2 // Minimum allowable distance
+    const minDistanceMax = nodeSize * 4 // Maximum allowable distance
+    const scalingFactor = 1.5 // Adjust for sensitivity
+
+    const total = Object.keys(peerData).length + Object.keys(remotePeerData).length
+
+    if (total <= 1) return minDistanceMax
+
+    // Dynamically scale the minDistance
+    let distance = Math.max(
+      minDistanceMin,
+      Math.min(minDistanceMax, minDistanceMax - Math.log(containers.length) * scalingFactor),
+    )
+    if (distance > CONTAINER_WIDTH / 2) {
+      distance = CONTAINER_WIDTH / 4
+    }
+
+    return distance
+  }, [peerData, remotePeerData, nodeSize])
 
   useEffect(() => {
     nodesRef.current = allNodes
@@ -1377,12 +1375,34 @@ export default function Home() {
   }, [edges])
 
   const stepSimulation = useCallback(() => {
+    if (pauseSim) return
     let allStable = true
     const updated = { ...nodesRef.current }
 
     Object.entries(updated).forEach(([id, node]) => {
-      let fx = 0,
-        fy = 0
+      let fx = 0
+      let fy = 0
+
+      const half = nodeSize / 2
+      const W = CONTAINER_WIDTH
+      const H = CONTAINER_HEIGHT
+      const wallCharge = mapTypeForces[mapType].repulsion * 2 // tweak multiplier
+
+      // left wall
+      const dl = node.x - half
+      if (dl > 0) fx += wallCharge / (dl * dl)
+
+      // right wall
+      const dr = W - half - node.x
+      if (dr > 0) fx -= wallCharge / (dr * dr)
+
+      // top wall
+      const dt = node.y - half
+      if (dt > 0) fy += wallCharge / (dt * dt)
+
+      // bottom wall
+      const db = H - half - node.y
+      if (db > 0) fy -= wallCharge / (db * db)
 
       // 1) check stability
       if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
@@ -1432,6 +1452,22 @@ export default function Home() {
       fx += (centerX - node.x) * mapTypeForces[mapType].gravity
       fy += (centerY - node.y) * mapTypeForces[mapType].gravity
 
+      // // 4.5) SOFT-BOUNDARY FORCE
+      // const margin = nodeSize // keep nodes at least one radius from wall
+      // const boundaryStrength = 100_000_000 // tweak this to make the push gentler or stronger
+      //
+      // if (node.x < margin) {
+      //   fx += (margin - node.x) * boundaryStrength
+      // } else if (node.x > CONTAINER_WIDTH - margin) {
+      //   fx += (CONTAINER_WIDTH - margin - node.x) * boundaryStrength
+      // }
+      //
+      // if (node.y < margin) {
+      //   fy += (margin - node.y) * boundaryStrength
+      // } else if (node.y > CONTAINER_HEIGHT - margin) {
+      //   fy += (CONTAINER_HEIGHT - margin - node.y) * boundaryStrength
+      // }
+
       // 5) collision
       Object.values(updated).forEach((other) => {
         if (other === node) return
@@ -1474,9 +1510,16 @@ export default function Home() {
       setRemotePeerData((prev) => {
         const next = { ...prev }
         Object.keys(prev).forEach((rid) => {
-          if (isRemotePeerConnectedToContainer(rid)) {
-            const u = updated[rid]
-            if (u) next[rid] = { ...next[rid], ...u }
+          const u = updated[rid]
+          if (u) {
+            // always update any remote peer that has a computed position
+            next[rid] = {
+              ...next[rid],
+              x: u.x,
+              y: u.y,
+              vx: u.vx,
+              vy: u.vy,
+            }
           }
         })
         return next
@@ -1493,7 +1536,7 @@ export default function Home() {
         stabilizedRef.current = true
       }
     }
-  }, [mapType, nodeSize, minDistance])
+  }, [pauseSim, mapType, nodeSize, minDistance])
 
   // The rAF‐driven effect
   useEffect(() => {
@@ -1511,13 +1554,6 @@ export default function Home() {
     }
 
     const loop = () => {
-      // const times = frameTimesRef.current
-      // times.push(timestamp)
-      // // drop anything older than 1 s
-      // const cutoff = timestamp - 1000
-      // while (times.length && times[0] < cutoff) times.shift()
-      // // fps = number of frames in last second
-      // if (fpsRef.current) fpsRef.current.textContent = `${times.length} FPS`
       stepSimulation()
       if (!stabilizedRef.current) {
         rafIdRef.current = requestAnimationFrame(loop)
@@ -1568,158 +1604,6 @@ export default function Home() {
 
     return () => cancelAnimationFrame(rafId)
   }, []) // run once on mount
-
-  // // Compound Spring Embedder Force-Directed Layout Implementation
-  // useEffect(() => {
-  //   if (mapView !== 'graph' && mapView !== 'canvas') return
-  //
-  //   const centerX = CONTAINER_WIDTH / 2
-  //   const centerY = CONTAINER_HEIGHT / 2
-  //   const VELOCITY_THRESHOLD = 1
-  //   const STABLE_ITERATIONS = 20
-  //   const MAX_UNSTABLE_ITERATIONS = 15 * 30 // 30 fps over 15 seconds
-  //
-  //   const edgesChanged = !areEdgesEqual(prevEdgesRef.current, edges)
-  //   if (edgesChanged) {
-  //     stableCountRef.current = 0
-  //     unstableCountRef.current = 0
-  //
-  //     stabilizedRef.current = false
-  //     prevEdgesRef.current = edges
-  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-  //   }
-  //
-  //   intervalIdRef.current = window.setInterval(() => {
-  //     if (stabilizedRef.current && intervalIdRef.current) {
-  //       window.clearInterval(intervalIdRef.current)
-  //       return
-  //     }
-  //
-  //     let allStable = true
-  //     // Clone positions & velocities
-  //     const updated = { ...allNodes }
-  //
-  //     // Compute forces for each nodeId in allNodes
-  //     Object.entries(updated).forEach(([id, node]) => {
-  //       let fx = 0
-  //       let fy = 0
-  //       // stability
-  //       if (Math.abs(node.vx) > VELOCITY_THRESHOLD || Math.abs(node.vy) > VELOCITY_THRESHOLD) {
-  //         // console.log('id unstable', id)
-  //         allStable = false
-  //         stableCountRef.current = 0
-  //       }
-  //
-  //       // 1. Repulsion among all nodes
-  //       Object.entries(updated).forEach(([oid, other]) => {
-  //         if (id === oid) return
-  //         const dx = node.x - other.x
-  //         const dy = node.y - other.y
-  //         let dist = Math.sqrt(dx * dx + dy * dy) || 1
-  //         dist = Math.max(dist, nodeSize)
-  //         const rep = mapTypeForces[mapType].repulsion / (dist * dist)
-  //         fx += (dx / dist) * rep
-  //         fy += (dy / dist) * rep
-  //       })
-  //
-  //       // 2. Attraction along edges
-  //       edges.forEach((e) => {
-  //         if (e.from === id || e.to === id) {
-  //           const otherId = e.from === id ? e.to : e.from
-  //           const other = updated[otherId]
-  //           if (!other) return
-  //           const dx = other.x - node.x
-  //           const dy = other.y - node.y
-  //           const dist = Math.sqrt(dx * dx + dy * dy) || 1
-  //           const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
-  //           fx += (dx / dist) * attr
-  //           fy += (dy / dist) * attr
-  //         }
-  //       })
-  //
-  //       // 3. Central gravity
-  //       fx += (centerX - node.x) * mapTypeForces[mapType].gravity
-  //       fy += (centerY - node.y) * mapTypeForces[mapType].gravity
-  //
-  //       // 4. Collision
-  //       Object.entries(updated).forEach(([oid, other]) => {
-  //         if (id === oid) return
-  //         const dx = node.x - other.x
-  //         const dy = node.y - other.y
-  //         const dist = Math.sqrt(dx * dx + dy * dy) || 1
-  //         if (dist < minDistance) {
-  //           const overlap = minDistance - dist
-  //           const col = (overlap / dist) * mapTypeForces[mapType].collision
-  //           fx += (dx / dist) * col
-  //           fy += (dy / dist) * col
-  //         }
-  //       })
-  //
-  //       // 5. Damping
-  //       node.vx = (node.vx + fx) * mapTypeForces[mapType].damping
-  //       node.vy = (node.vy + fy) * mapTypeForces[mapType].damping
-  //
-  //       // 6. Cap velocity
-  //       node.vx = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vx))
-  //       node.vy = Math.max(-mapTypeForces[mapType].maxVelocity, Math.min(mapTypeForces[mapType].maxVelocity, node.vy))
-  //
-  //       // 7. Update pos
-  //       node.x += node.vx
-  //       node.y += node.vy
-  //
-  //       // 8. Boundaries
-  //       node.x = Math.max(nodeSize / 2, Math.min(CONTAINER_WIDTH - nodeSize / 2, node.x))
-  //       node.y = Math.max(nodeSize / 2, Math.min(CONTAINER_HEIGHT - nodeSize / 2, node.y))
-  //     })
-  //
-  //     // Separate updates back to states
-  //     // Containers
-  //     setPeerData((prev) => {
-  //       const next = { ...prev }
-  //       Object.entries(prev).forEach(([cid]) => {
-  //         const u = updated[cid]
-  //         if (u) next[cid] = { ...next[cid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-  //       })
-  //       return next
-  //     })
-  //
-  //     // Remotes
-  //     setRemotePeerData((prev) => {
-  //       const next: RemotePeers = { ...prev }
-  //       Object.keys(prev).forEach((rid) => {
-  //         if (isRemotePeerConnectedToContainer(rid)) {
-  //           const u = updated[rid]
-  //           if (u) {
-  //             next[rid] = { ...next[rid], x: u.x, y: u.y, vx: u.vx, vy: u.vy }
-  //           }
-  //         }
-  //       })
-  //       return next
-  //     })
-  //
-  //     // stability
-  //     if (allStable) {
-  //       stableCountRef.current += 1
-  //       if (stableCountRef.current >= STABLE_ITERATIONS) {
-  //         stabilizedRef.current = true
-  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-  //       }
-  //     } else {
-  //       stableCountRef.current = 0
-  //       unstableCountRef.current += 1
-  //       if (unstableCountRef.current > MAX_UNSTABLE_ITERATIONS) {
-  //         stableCountRef.current = STABLE_ITERATIONS
-  //         allStable = true
-  //         stabilizedRef.current = true
-  //         if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-  //       }
-  //     }
-  //   }, 30)
-  //
-  //   return () => {
-  //     if (intervalIdRef.current) window.clearInterval(intervalIdRef.current)
-  //   }
-  // }, [allNodes, edges, mapView, mapType, setPeerData, setRemotePeerData])
 
   useEffect(() => {
     if (mapView !== 'canvas') return
@@ -1776,6 +1660,23 @@ export default function Home() {
       }
     })
   }, [allNodes, edges, selectedContainer, nodeSize, mapView])
+
+  useEffect(() => {
+    // build a set of all remotePeerIds *still* in use
+    const inUse = new Set<string>()
+    Object.values(peerData).forEach((pd) => {
+      Object.keys(pd.remotePeers).forEach((rid) => inUse.add(rid))
+    })
+
+    // prune your remotePeerData state down to only those still inUse
+    setRemotePeerData((prev) => {
+      const next: RemotePeers = {}
+      inUse.forEach((rid) => {
+        if (prev[rid]) next[rid] = prev[rid]
+      })
+      return next
+    })
+  }, [peerData])
 
   // Auto publish if enabled
   useEffect(() => {
@@ -2114,7 +2015,6 @@ export default function Home() {
               padding: '4px 8px',
               background: 'rgba(0,0,0,0.6)',
               color: 'white',
-              fontFamily: 'monospace',
               fontSize: '12px',
               borderRadius: '4px',
               zIndex: 1000,
@@ -2123,57 +2023,73 @@ export default function Home() {
             — FPS —
           </div>
           {controllerStatus === 'connecting' && (
-            <div
-              style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'green', fontSize: '20px' }}
-            >
+            <div style={{ position: 'absolute', top: '8px', left: '8px', zIndex: -1, fontSize: '20px' }}>
               Connecting to controller...
             </div>
           )}
           {controllerStatus === 'offline' && (
-            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1, color: 'red', fontSize: '20px' }}>
+            <div style={{ position: 'absolute', top: '8px', left: '8px', zIndex: -1, color: 'red', fontSize: '20px' }}>
               Controller offline
             </div>
           )}
           {controllerStatus === 'online' && (
-            <div style={{ position: 'absolute', top: '0px', left: '0px', zIndex: -1 }}>
-              <h1>{mapType}</h1>
-              <div>{`Total containers: ${containers.length}`}</div>
-              <div>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`}</div>
-
-              <div>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</div>
-              {/* FPS Overlay */}
+            <div style={{ position: 'absolute', top: '8px', left: '8px', zIndex: -1 }}>
+              <h1 style={{ textTransform: 'capitalize' }}>{mapType}</h1>
+            </div>
+          )}
+          {controllerStatus === 'online' && (
+            <div style={{ position: 'absolute', bottom: '8px', left: '8px', zIndex: -1 }}>
+              <div>
+                <p>{`Total containers: ${containers.length}`}</p>
+                <p>{`Bootstrap containers: ${containers.filter((c) => c.image.includes('bootstrap')).length}`} </p>
+                <p>{`Gossip containers: ${containers.filter((c) => c.image.includes('gossip')).length}`}</p>
+                <p>{`Remote Peers: ${Object.keys(remotePeerData).length}`}</p>
+              </div>
             </div>
           )}
           <div
             style={{
               position: 'absolute',
-              top: '0px',
-              right: '0px',
+              top: '8px',
+              right: '8px',
               fontSize: '30px',
               zIndex: 10,
               textAlign: 'center',
             }}
           >
-            <h6 style={{ marginBottom: '10px' }}>View:</h6>
-            {mapView === 'graph' ? (
-              <div>
-                <span style={{ color: 'white', marginRight: '10px' }}>
-                  <FaCircleNodes />
-                </span>
-                <span style={{ color: 'gray' }} onClick={() => setMapView('circle')}>
-                  <FaRegCircle />
-                </span>
+            <h6 style={{ marginBottom: '10px' }}>View</h6>
+            <div style={{ display: 'flex' }}>
+              {mapView === 'graph' ? (
+                <div>
+                  <span style={{ color: 'white', marginRight: '10px' }}>
+                    <FaCircleNodes style={{ cursor: 'pointer' }} />
+                  </span>
+                  <span style={{ color: 'gray' }} onClick={() => setMapView('circle')}>
+                    <FaRegCircle style={{ cursor: 'pointer' }} />
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <span style={{ color: 'gray', marginRight: '10px' }} onClick={() => setMapView('graph')}>
+                    <FaCircleNodes />
+                  </span>
+                  <span style={{ color: 'white' }}>
+                    <FaRegCircle />
+                  </span>
+                </div>
+              )}
+              <div style={{ marginLeft: '10px' }}>
+                {pauseSim ? (
+                  <div>
+                    <FaPlay style={{ cursor: 'pointer' }} onClick={() => setPauseSim(false)} />
+                  </div>
+                ) : (
+                  <div>
+                    <FaPause style={{ cursor: 'pointer' }} onClick={() => setPauseSim(true)} />
+                  </div>
+                )}
               </div>
-            ) : (
-              <div>
-                <span style={{ color: 'gray', marginRight: '10px' }} onClick={() => setMapView('graph')}>
-                  <FaCircleNodes />
-                </span>
-                <span style={{ color: 'white' }}>
-                  <FaRegCircle />
-                </span>
-              </div>
-            )}
+            </div>
           </div>
           <div className='graph'>
             {mapView === 'graph' && (
@@ -2491,7 +2407,7 @@ export default function Home() {
         <div className='sidebar sidebar2'>
           <h1>GossipSub Simulator</h1>
           <button onClick={handleClickType}>Clicks: {clickType}</button>
-          <button onClick={handleHoverType}>Hover Shows: {hoverType}</button>
+          <button onClick={handleHoverType}>Hover/select Shows: {hoverType}</button>
           <h3>Gossipsub</h3>
           <button onClick={() => setConverge(!converge)}>Show Convergence: {converge ? 'ON' : 'OFF'}</button>
           <button onClick={() => setAutoPublish(!autoPublish)}>Auto Publish: {autoPublish ? 'ON' : 'OFF'}</button>
@@ -2539,7 +2455,8 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {remotePeerData[selectedRemotePeer]?.protocols?.map((p, index) => (
-                  <p key={index} style={{ marginBottom: '0.5rem' }}>
+                  <p key={index}>
+                    &bull;{'\u00A0'}
                     {p}
                   </p>
                 ))}

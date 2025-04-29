@@ -108,6 +108,7 @@ export class StatusServer {
   private lastDhtPeers: string[] = []
   private lastDhtProvideStatus: DHTProvideStatus = null
   private lastDhtFindProviderResult: string[] = []
+  private dhtFindProviderSignalController: AbortController | undefined = undefined
 
   // perf
   private connectTime: number = 0
@@ -400,13 +401,25 @@ export class StatusServer {
               break
             }
 
+            if (self.dhtFindProviderSignalController) {
+              self.dhtFindProviderSignalController.abort()
+              self.lastDhtFindProviderResult = ['aborted']
+              await self.sendUpdate({
+                dhtFindProviderResult: self.lastDhtFindProviderResult,
+              })
+            }
+
             self.lastDhtFindProviderResult = ['searching']
             await self.sendUpdate({
               dhtFindProviderResult: self.lastDhtFindProviderResult,
             })
             try {
+              self.dhtFindProviderSignalController = new AbortController()
+              const timeoutSignal = AbortSignal.timeout(60_000)
+              const signal = AbortSignal.any([timeoutSignal, self.dhtFindProviderSignalController.signal])
+
               for await (const provider of self.server.contentRouting.findProviders(c, {
-                signal: AbortSignal.timeout(60_000),
+                signal,
               })) {
                 console.log(provider)
 
