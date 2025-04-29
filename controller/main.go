@@ -933,6 +933,7 @@ func getRandomColorV2() string {
 func publishHandler(w http.ResponseWriter, r *http.Request) {
 	type RequestBody struct {
 		Amount      int    `json:"amount"`
+		ClearStats  bool   `json:"clearStats,omitempty"`
 		Size        int    `json:"size,omitempty"`
 		Topic       string `json:"topic,omitempty"`
 		ContainerID string `json:"containerId,omitempty"`
@@ -944,7 +945,14 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("reqbody %+v\n", reqBody)
+	if reqBody.ClearStats {
+		err := clearPubsubStats()
+		if err != nil {
+			fmt.Printf("Failed to clear pubsub stats: %v", err)
+			http.Error(w, "Could not clear pubsub stats", http.StatusInternalServerError)
+			return
+		}
+	}
 
 	amount := 1
 	if reqBody.Amount <= 0 {
@@ -1003,7 +1011,7 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	c.SetWriteDeadline(time.Now().Add(3 * time.Second))
 	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
 		c.Close()
 		http.Error(w, fmt.Sprintf("Failed to write 'publish' to container: %s, %v", containerID, err), http.StatusInternalServerError)
@@ -1011,6 +1019,45 @@ func publishHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusCreated)
+}
+
+func clearPubsubStats() error {
+	message := map[string]any{}
+	msg := &ContainerWSReq{
+		MType:   "clearpubsub",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
+
+	broadcastToAllContainers(data)
+
+	return nil
+}
+
+func broadcastToAllContainers(data []byte) {
+	containerConnsMu.RLock()
+	defer containerConnsMu.RUnlock()
+
+	var wg sync.WaitGroup
+
+	for id, c := range containerConns {
+		wg.Add(1)
+		go func(id string, c *websocket.Conn) {
+			defer wg.Done()
+
+			c.SetWriteDeadline(time.Now().Add(3 * time.Second))
+			err := c.WriteMessage(websocket.TextMessage, data)
+			if err != nil {
+				fmt.Printf("Error broadcasting to container %s: %v\n", id, err)
+			}
+		}(id, c)
+	}
+
+	wg.Wait()
 }
 
 // connectHandler sends a message to a container to connect to another host

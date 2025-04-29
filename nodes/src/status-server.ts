@@ -67,6 +67,7 @@ export interface Update {
   dhtProvideStatus?: DHTProvideStatus
   dhtFindProviderResult?: string[]
   lastMessage?: string
+  messageCount?: number
   peerScores?: PeerScores
   rtts?: RTTs
   connectTime?: number
@@ -99,6 +100,7 @@ export class StatusServer {
   private lastMeshPeersList: TopicsPeers = {}
   private lastFanoutList: TopicsPeers = {}
   private lastMessage: string = ''
+  private messageCount: number = 0
   private lastPeerScores: PeerScores = {}
   private _message: string = ''
 
@@ -167,8 +169,9 @@ export class StatusServer {
     }
 
     this.message = toString(evt.detail.data)
+    this.messageCount++
 
-    await this.sendUpdate({ lastMessage: this.message })
+    await this.sendUpdate({ lastMessage: this.message, messageCount: this.messageCount })
   }
 
   private getRemotePeers = async (): Promise<RemotePeers> => {
@@ -280,15 +283,6 @@ export class StatusServer {
             break
           }
 
-          case 'info': {
-            const update: Partial<Update> = {}
-            self.lastPeerScores = self.getPeerScores()
-            update.peerScores = self.lastPeerScores
-
-            ws.send(JSON.stringify(update))
-            break
-          }
-
           case 'publish': {
             if (!self.server.services.pubsub) {
               return
@@ -308,19 +302,29 @@ export class StatusServer {
             }
 
             for (let i = 0; i < amount; i++) {
-              try {
-                const pubRes = await self.server.services.pubsub.publish(topic, fromString(self.message))
-                // console.log('published', pubRes)
-                await self.sendUpdate({ lastMessage: self.message })
-              } catch (e) {
-                console.log(e)
-              }
-
               if (amount > 1) {
                 self.message = self.getRandomColor()
                 self.lastMessage = self.message
               }
+
+              try {
+                self.messageCount++
+                const pubRes = await self.server.services.pubsub.publish(topic, fromString(self.message))
+                // console.log('published', pubRes)
+                await self.sendUpdate({ lastMessage: self.message, messageCount: self.messageCount })
+              } catch (e) {
+                console.log(e)
+              }
             }
+            break
+          }
+
+          case 'clearpubsub': {
+            console.log('clearpubsub msg', newMessage)
+            self.message = ''
+            self.lastMessage = ''
+            self.messageCount = 0
+
             break
           }
 
@@ -752,6 +756,8 @@ export class StatusServer {
 
     this.lastMessage = this._message
     update.lastMessage = this.lastMessage
+
+    update.messageCount = this.messageCount
 
     // dht
     const dhtPeerList = this.getDHTPeerList()

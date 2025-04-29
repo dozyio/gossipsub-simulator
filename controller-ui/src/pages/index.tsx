@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CID } from 'multiformats/cid'
 import { sha256 } from 'multiformats/hashes/sha2'
 import * as raw from 'multiformats/codecs/raw'
+import { unstable_batchedUpdates } from 'react-dom'
 
 interface PortMapping {
   ip: string
@@ -74,6 +75,7 @@ interface PeerData {
   topics: string[]
   type: string
   lastMessage: string
+  messageCount: number
   peerScores: PeerScores
   rtts: RRTs
   connectTime: number
@@ -177,6 +179,13 @@ export default function Home() {
   const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
   const [dhtFindProviderCid, setDhtFindProviderCid] = useState<string>('')
 
+  /// gossip stuff
+  const [trackConverge, setTrackConverge] = useState<boolean>(false)
+  const [convergeStart, setConvergeStart] = useState<number>(0)
+  const [convergeEnd, setConvergeEnd] = useState<number>(0)
+  const [convergeCount, setConvergeCount] = useState<number>(0)
+  const [converged, setConverged] = useState<boolean>(false)
+
   // graph stuff
   const [edges, setEdges] = useState<{ from: string; to: string }[]>([])
   const prevEdgesRef = useRef(edges) // Store previous connections for comparison
@@ -236,6 +245,7 @@ export default function Home() {
             topics: [],
             type: '',
             lastMessage: '',
+            messageCount: 0,
             peerScores: {},
             rtts: {},
             connectTime: -1,
@@ -582,7 +592,13 @@ export default function Home() {
     }
   }
 
-  const publishToTopic = async (containerId: string = '', amount = 1, size = 1): Promise<void> => {
+  const publishToTopic = async (
+    containerId: string = '',
+    amount = 1,
+    size = 1,
+    clearStats: boolean = false,
+    trackConvergance: boolean = false,
+  ): Promise<void> => {
     if (containers.length === 0) {
       return
     }
@@ -592,16 +608,29 @@ export default function Home() {
       topic: string
       size: number
       containerId?: string
+      clearStats?: boolean
     }
 
     const body: Body = {
       amount,
       topic: selectedTopic,
       size,
+      clearStats,
     }
 
     if (containerId !== '') {
       body.containerId = containerId
+    }
+
+    if (trackConvergance) {
+      // Reset all counts to 0
+      setPeerData((prev) =>
+        Object.fromEntries(Object.entries(prev).map(([cid, data]) => [cid, { ...data, messageCount: 0 }])),
+      )
+      setConvergeCount(amount)
+      setConvergeStart(Date.now())
+      setTrackConverge(true)
+      setConverged(false)
     }
 
     try {
@@ -1005,6 +1034,7 @@ export default function Home() {
         return merged
       })
     }
+
     setPeerData((prev) => {
       const peer = prev[data.containerId]
       if (!peer) {
@@ -1218,6 +1248,17 @@ export default function Home() {
     }
   }, [])
 
+  useEffect(() => {
+    const list = Object.values(peerData)
+    const hasConverged = list.length > 0 && list.every((d) => d.messageCount >= convergeCount)
+
+    if (trackConverge && hasConverged) {
+      setConvergeEnd(Date.now())
+      setConverged(true)
+      setTrackConverge(false)
+    }
+  }, [peerData, trackConverge, convergeCount])
+
   // Edge generation
   useEffect(() => {
     const newEdges: { from: string; to: string }[] = []
@@ -1344,8 +1385,8 @@ export default function Home() {
       try {
         Object.values(updated).forEach((other) => {
           if (other === node) return
-          const dx = node.x - other.x,
-            dy = node.y - other.y
+          const dx = node.x - other.x
+          const dy = node.y - other.y
           let dist = Math.hypot(dx, dy) || 1
           dist = Math.max(dist, nodeSize)
           const rep = mapTypeForces[mapType].repulsion / (dist * dist)
@@ -1354,6 +1395,7 @@ export default function Home() {
         })
       } catch (err: any) {
         console.error('Error applying repulsion force:', err)
+        return
       }
 
       // 3) attraction
@@ -1361,16 +1403,20 @@ export default function Home() {
         edgesRef.current.forEach((e) => {
           if (e.from === id || e.to === id) {
             const other = updated[e.from === id ? e.to : e.from]
-            const dx = other.x - node.x,
-              dy = other.y - node.y
-            const dist = Math.hypot(dx, dy) || 1
+            if (!other) {
+              return
+            }
+            const dx = other.x - node.x
+            const dy = other.y - node.y
+            const dist = Math.hypot(dx, dy) || 0.01
             const attr = (dist - mapTypeForces[mapType].naturalLength) * mapTypeForces[mapType].attraction
             fx += (dx / dist) * attr
             fy += (dy / dist) * attr
           }
         })
       } catch (err: any) {
-        console.error('Error applying attraction force:', err)
+        console.error('Error applying attraction force:', err, id, node)
+        return
       }
 
       // 4) central gravity
@@ -1406,24 +1452,26 @@ export default function Home() {
     })
 
     // push back into React state:
-    setPeerData((prev) => {
-      const next = { ...prev }
-      Object.keys(prev).forEach((cid) => {
-        const u = updated[cid]
-        if (u) next[cid] = { ...next[cid], ...u }
+    unstable_batchedUpdates(() => {
+      setPeerData((prev) => {
+        const next = { ...prev }
+        Object.keys(prev).forEach((cid) => {
+          const u = updated[cid]
+          if (u) next[cid] = { ...next[cid], ...u }
+        })
+        return next
       })
-      return next
-    })
 
-    setRemotePeerData((prev) => {
-      const next = { ...prev }
-      Object.keys(prev).forEach((rid) => {
-        if (isRemotePeerConnectedToContainer(rid)) {
-          const u = updated[rid]
-          if (u) next[rid] = { ...next[rid], ...u }
-        }
+      setRemotePeerData((prev) => {
+        const next = { ...prev }
+        Object.keys(prev).forEach((rid) => {
+          if (isRemotePeerConnectedToContainer(rid)) {
+            const u = updated[rid]
+            if (u) next[rid] = { ...next[rid], ...u }
+          }
+        })
+        return next
       })
-      return next
     })
 
     // track convergence / bail-out
@@ -2245,7 +2293,7 @@ export default function Home() {
                         borderRadius: `${getBorderRadius(container.id)}`,
                         position: 'absolute',
                         transform: `translate(-50%, -50%)`, // Center the node
-                        transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                        // transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${peerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -2254,46 +2302,6 @@ export default function Home() {
                   )
                 })}
 
-                {/* {Object.keys(remotePeerData).map((k) => {
-                  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                  for (const [_, containerDetails] of Object.entries(peerData)) {
-                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    for (const [remotePeerId, _] of Object.entries(containerDetails.remotePeers)) {
-                      if (k === remotePeerId) {
-                        return (
-                          <div
-                            key={k}
-                            ref={(el) => {
-                              remotePeerRefs.current[k] = el
-                            }}
-                            className='container remotepeer'
-                            onClick={() => handleRemotePeerClick(k)}
-                            // onMouseEnter={() => setHoveredContainerId(container.id)}
-                            // onMouseLeave={() => setHoveredContainerId(null)}
-                            style={{
-                              width: `${nodeSize}px`,
-                              height: `${nodeSize}px`,
-                              lineHeight: `${nodeSize}px`,
-                              left: `${remotePeerData[k].x}px`,
-                              top: `${remotePeerData[k].y}px`,
-                              fontSize: `${Math.max(8, nodeSize / 3)}px`,
-                              backgroundColor: `darkorange`, //`${getBackgroundColor(container.id)}`,
-                              // opacity: 1, // `${getOpacity(container.id)}`,
-                              // border: `${getBorderStyle(container.id)}`,
-                              // borderRadius: `${getBorderRadius(container.id)}`,
-                              position: 'absolute',
-                              transform: `translate(-50%, -50%)`, // Center the node
-                              transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
-                            }}
-                            title={`Remote Peer\nPeer ID: ${k}`}
-                          >
-                            {k}
-                          </div>
-                        )
-                      }
-                    }
-                  }
-                })} */}
                 {activeRemotePeers.map(([peerId, peer]) => (
                   <div
                     key={peerId}
@@ -2315,7 +2323,7 @@ export default function Home() {
                       // borderRadius: `${getBorderRadius(container.id)}`,
                       position: 'absolute',
                       transform: `translate(-50%, -50%)`, // Center the node
-                      transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
+                      // transition: 'background-color 0.1s, border 0.1s', // Smooth transitions
                     }}
                     title={`Remote Peer\nPeer ID: ${peerId}`}
                   >
@@ -2457,7 +2465,7 @@ export default function Home() {
                         opacity: `${getOpacity(container.id)}`,
                         border: `${getBorderStyle(container.id)}`,
                         borderRadius: `${getBorderRadius(container.id)}`,
-                        transition: 'background-color 0.1s, border 0.1s',
+                        // transition: 'background-color 0.1s, border 0.1s',
                       }}
                       title={`Container ID: ${container.id}\nPeer ID: ${peerData[container.id]?.peerId || 'Loading...'}`}
                     >
@@ -2522,8 +2530,7 @@ export default function Home() {
               <div>
                 Protocols:{' '}
                 {remotePeerData[selectedRemotePeer]?.protocols?.map((p, index) => (
-                  <p key={index}>
-                    &bull;{'\u00A0'}
+                  <p key={index} style={{ marginBottom: '0.5rem' }}>
                     {p}
                   </p>
                 ))}
@@ -2531,8 +2538,7 @@ export default function Home() {
               <div>
                 Multiaddrs:{' '}
                 {remotePeerData[selectedRemotePeer]?.multiaddrs?.map((p, index) => (
-                  <p key={index}>
-                    &bull;{'\u00A0'}
+                  <p key={index} style={{ marginBottom: '0.5rem' }}>
                     {p}
                   </p>
                 ))}
@@ -2541,14 +2547,29 @@ export default function Home() {
           )}
           {selectedContainer && peerData[selectedContainer] && (
             <div>
-              <p>Publish to selected peer</p>
+              <p>
+                <span title='clears Received Pubsub count'></span>Publish to selected peer
+              </p>
               <div style={{ display: 'flex' }}>
-                <button onClick={() => publishToTopic(selectedContainer, 1)}>1</button>
-                <button onClick={() => publishToTopic(selectedContainer, 1_000)}>1k</button>
-                <button onClick={() => publishToTopic(selectedContainer, 100_000)}>100k</button>
+                <button onClick={() => publishToTopic(selectedContainer, 1, 1, true, true)}>1</button>
+                <button onClick={() => publishToTopic(selectedContainer, 1_000, 1, true, true)}>1k</button>
+                <button onClick={() => publishToTopic(selectedContainer, 100_000, 1, true, true)}>100k</button>
               </div>
-              <h3>DHT Commands</h3>
+              <p>
+                <span title='approximate time as websocket data updates to/from each host not instant'>
+                  Time to converge
+                </span>
+                :{' '}
+                {converged && (
+                  <>
+                    {convergeEnd - convergeStart}
+                    <span>ms</span>
+                  </>
+                )}
+                {!converged && <>waiting...</>}
+              </p>
 
+              <h3>DHT Commands</h3>
               <div className='input-group'>
                 <label>
                   Provide: <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
@@ -2573,8 +2594,7 @@ export default function Home() {
                 <div>
                   Find Providers results:
                   {peerData[selectedContainer]?.dhtFindProviderResult?.map((p, index) => (
-                    <p key={index}>
-                      &bull;{'\u00A0'}
+                    <p key={index} style={{ marginBottom: '0.5rem' }}>
                       {p}
                     </p>
                   ))}
@@ -2651,11 +2671,12 @@ export default function Home() {
                 <button onClick={() => stopTCPDump(selectedContainer)}>Stop TCPDump</button>
               )}
               <h3>Peer Info</h3>
+              <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
               <div>Container ID: {selectedContainer}</div>
               <p>Docker connect: docker exec -it {selectedContainer} /bin/sh</p>
               <p>Type: {peerData[selectedContainer]?.type}</p>
-              <p>Peer ID: {peerData[selectedContainer]?.peerId}</p>
               <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
+              <div>Received Pubsub: {peerData[selectedContainer]?.messageCount}</div>
               <div>Mesh Peers:</div>
               {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
                 <div>
@@ -2705,8 +2726,7 @@ export default function Home() {
               <div>
                 Multiaddrs:{' '}
                 {peerData[selectedContainer]?.multiaddrs?.map((p, index) => (
-                  <p key={index}>
-                    &bull;{'\u00A0'}
+                  <p key={index} style={{ marginBottom: '0.5rem' }}>
                     {p}
                   </p>
                 ))}
@@ -2714,8 +2734,7 @@ export default function Home() {
               <div>Connections: {peerData[selectedContainer]?.connections.length}</div>
               <div>
                 {Object.keys(peerData[selectedContainer]?.remotePeers).map((rpid) => (
-                  <p key={rpid} style={{ marginLeft: '1rem' }}>
-                    &bull;{'\u00A0'}
+                  <p key={rpid} style={{ marginBottom: '0.5rem' }}>
                     {rpid}
                   </p>
                 ))}
@@ -2829,8 +2848,6 @@ export default function Home() {
             cursor: pointer;
             transform-origin: 50% 50%;
             transition:
-              left 0.1s,
-              top 0.1s,
               background-color 0.2s,
               border 0.1s;
             overflow: hidden;
