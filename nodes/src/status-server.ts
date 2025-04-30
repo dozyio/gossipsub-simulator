@@ -9,6 +9,7 @@ import { toString } from 'uint8arrays'
 import { Multiaddr, multiaddr } from '@multiformats/multiaddr'
 import { SingleKadDHT } from '@libp2p/kad-dht'
 import { CID } from 'multiformats/cid'
+import { peerIdFromString } from '@libp2p/peer-id'
 
 interface Stream {
   protocol: string
@@ -66,6 +67,7 @@ export interface Update {
   dhtPeers?: string[]
   dhtProvideStatus?: DHTProvideStatus
   dhtFindProviderResult?: string[]
+  dhtFindPeerResult?: string[]
   lastMessage?: string
   messageCount?: number
   peerScores?: PeerScores
@@ -109,6 +111,8 @@ export class StatusServer {
   private lastDhtProvideStatus: DHTProvideStatus = null
   private lastDhtFindProviderResult: string[] = []
   private dhtFindProviderSignalController: AbortController | undefined = undefined
+  private lastDhtFindPeerResult: string[] = []
+  private dhtFindPeerSignalController: AbortController | undefined = undefined
 
   // perf
   private connectTime: number = 0
@@ -187,8 +191,8 @@ export class StatusServer {
           }
           // as const so tuple type is preserved
           return [peer.id.toString(), rp] as const
-        } catch (e) {
-          console.error(`error getting remote peer ${conn.remotePeer} from peerStore`, e)
+        } catch (e: any) {
+          console.error(`error getting remote peer ${conn.remotePeer} from peerStore`, e.code)
           return undefined
         }
       }),
@@ -453,10 +457,63 @@ export class StatusServer {
           }
 
           case 'dhtfindpeer': {
-            console.log('dhtfindprovider msg', newMessage)
+            console.log('dhtfindpeer msg', newMessage)
+
+            let p: PeerId
+            try {
+              p = peerIdFromString(newMessage.message.peerid)
+            } catch (e: any) {
+              self.lastDhtFindPeerResult = ['invalid peer id']
+
+              await self.sendUpdate({
+                dhtFindPeerResult: self.lastDhtFindPeerResult,
+              })
+              break
+            }
+
+            if (self.dhtFindPeerSignalController) {
+              self.dhtFindPeerSignalController.abort()
+              self.lastDhtFindPeerResult = ['aborted']
+              await self.sendUpdate({
+                dhtFindPeerResult: self.lastDhtFindPeerResult,
+              })
+            }
+
+            self.lastDhtFindPeerResult = ['searching']
+            await self.sendUpdate({
+              dhtFindPeerResult: self.lastDhtFindPeerResult,
+            })
+            try {
+              self.dhtFindPeerSignalController = new AbortController()
+              const timeoutSignal = AbortSignal.timeout(60_000)
+              const signal = AbortSignal.any([timeoutSignal, self.dhtFindPeerSignalController.signal])
+
+              const peerInfo = await self.server.peerRouting.findPeer(p, { signal })
+              console.log(peerInfo)
+
+              const multiaddrs = peerInfo.multiaddrs.map((ma) => ma.toString())
+              self.lastDhtFindPeerResult = multiaddrs
+
+              await self.sendUpdate({ dhtFindProviderResult: self.lastDhtFindProviderResult })
+            } catch (e: any) {
+              if (e.name === 'QueryAbortedError') {
+                console.log('dhtFindPeer aborted')
+                if (self.lastDhtFindPeerResult.length > 0) {
+                  if (self.lastDhtFindPeerResult[0] === 'searching') {
+                    self.lastDhtFindPeerResult[0] = 'peer-not-found'
+                  } else {
+                    self.lastDhtFindPeerResult.push('ended-after-60s')
+                  }
+                  await self.sendUpdate({ dhtFindPeerResult: self.lastDhtFindPeerResult })
+                }
+              } else {
+                self.lastDhtFindPeerResult = [`error ${e}`]
+
+                await self.sendUpdate({ dhtFindPeerResult: self.lastDhtFindPeerResult })
+              }
+            }
             break
           }
-
           default:
             console.log('unknown message type', newMessage.type)
             break
@@ -689,6 +746,7 @@ export class StatusServer {
 
     // skip dhtProvideStatus as has its own updater
     // skip dhtFindProviderResult as has its own updater
+    // skip dhtFindPeerResult as has its own updater
 
     if (!isEqual(this.connectTime, this.lastConnectTime)) {
       update.connectTime = this.connectTime
@@ -780,6 +838,7 @@ export class StatusServer {
 
     update.dhtProvideStatus = this.lastDhtProvideStatus
     update.dhtFindProviderResult = this.lastDhtFindProviderResult
+    update.dhtFindPeerResult = this.lastDhtFindPeerResult
 
     // perf connect
     this.lastConnectTime = this.connectTime

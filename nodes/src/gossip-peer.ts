@@ -18,6 +18,7 @@ import { Libp2pType } from './types.js'
 import { StatusServer } from './status-server.js'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { multiaddr } from '@multiformats/multiaddr'
+import { dcutr } from '@libp2p/dcutr'
 import {
   acceptPXScoreThreshold,
   bootstrapper1Ma,
@@ -199,6 +200,7 @@ import { plaintext } from '@libp2p/plaintext'
           clientMode: false,
           peerInfoMapper: dhtPeerMapper,
         }),
+        dcutr: dcutr(),
       },
     }
 

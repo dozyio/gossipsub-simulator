@@ -17,6 +17,7 @@ import { multiaddr } from '@multiformats/multiaddr'
 import { kadDHT, removePrivateAddressesMapper } from '@libp2p/kad-dht'
 import { peerIdFromString } from '@libp2p/peer-id'
 import { StatusServer } from './status-server.js'
+import { dcutr } from '@libp2p/dcutr'
 import {
   acceptPXScoreThreshold,
   bootstrapper1Ma,
@@ -236,6 +237,7 @@ import { plaintext } from '@libp2p/plaintext'
           //   minTimeout: 10_000,
           // }
         }),
+        dcutr: dcutr(),
       },
     }
 

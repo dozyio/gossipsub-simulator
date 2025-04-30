@@ -67,6 +67,7 @@ interface PeerData {
   dhtPeers: string[]
   dhtProvideStatus: string
   dhtFindProviderResult: string[]
+  dhtFindPeerResult: string[]
   connections: string[] // peer ids of connections
   remotePeers: RemotePeers
   protocols: string[]
@@ -178,6 +179,7 @@ export default function Home() {
   const [dhtProvideString, setDhtProvideString] = useState<string>('')
   const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
   const [dhtFindProviderCid, setDhtFindProviderCid] = useState<string>('')
+  const [dhtFindPeer, setDhtFindPeer] = useState<string>('')
 
   /// gossip stuff
   const [trackConverge, setTrackConverge] = useState<boolean>(false)
@@ -196,12 +198,7 @@ export default function Home() {
   const stableCountRef = useRef(0) // Track stable state count
   const unstableCountRef = useRef(0) // Track unstable state count
   const stabilizedRef = useRef(false) // Track if graph is already stabilized
-  const intervalIdRef = useRef<number | null>(null) // Store interval ID
-  // const [nodeSize, setNodeSize] = useState<number>(35)
-  // const [minDistance, setMinDistance] = useState<number>(nodeSize * 4)
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  // const nodesRef = useRef(allNodes)
-  // const edgesRef = useRef(edges)
   const nodesRef = useRef<Record<string, { x: number; y: number; vx: number; vy: number }>>({})
   const edgesRef = useRef<{ from: string; to: string }[]>([])
   const rafIdRef = useRef<number | null>(null)
@@ -238,6 +235,7 @@ export default function Home() {
             dhtPeers: [],
             dhtProvideStatus: '',
             dhtFindProviderResult: [],
+            dhtFindPeerResult: [],
             connections: [],
             remotePeers: {},
             protocols: [],
@@ -685,14 +683,14 @@ export default function Home() {
     }
   }
 
-  const handleDhtFindProvider = async (containerId: string = ''): Promise<void> => {
+  const handleDhtFindProvider = async (containerId: string): Promise<void> => {
     if (containers.length === 0) {
       return
     }
 
     interface Body {
       cid: string
-      container_id?: string
+      container_id: string
     }
 
     const body: Body = {
@@ -711,10 +709,43 @@ export default function Home() {
 
       if (!response.ok) {
         const errorText = await response.text()
-        throw new Error(`Error provide: ${errorText}`)
+        throw new Error(`Error findProvider: ${errorText}`)
       }
     } catch (error) {
-      console.error('Error provide:', error)
+      console.error('Error findProvider:', error)
+    }
+  }
+
+  const handleDhtFindPeer = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      peer_id: string
+      container_id: string
+    }
+
+    const body: Body = {
+      peer_id: dhtFindPeer,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/findpeer`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error findPeer: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error findPeer:', error)
     }
   }
 
@@ -2406,7 +2437,9 @@ export default function Home() {
         {/* Sidebar 2: Information and Actions */}
         <div className='sidebar sidebar2'>
           <h1>GossipSub Simulator</h1>
-          <button onClick={handleClickType}>Clicks: {clickType}</button>
+          <button onClick={handleClickType} style={{ backgroundColor: clickType === 'kill' ? 'red' : '#0070f3' }}>
+            Clicks: {clickType}
+          </button>
           <button onClick={handleHoverType}>Hover/select Shows: {hoverType}</button>
           <h3>Gossipsub</h3>
           <button onClick={() => setConverge(!converge)}>Show Convergence: {converge ? 'ON' : 'OFF'}</button>
@@ -2497,25 +2530,29 @@ export default function Home() {
 
               <h3>DHT Commands</h3>
               <div className='input-group'>
-                <label>
-                  Provide: <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
-                </label>
+                <label>Provide:</label>
+                <div style={{ display: 'flex' }}>
+                  <input type='text' value={dhtProvideString} onChange={(e) => handleDhtProvideString(e)} />
+                  <button onClick={() => handleDhtProvide(selectedContainer)}>Go</button>
+                </div>
                 <p>
                   CID: <span style={{ userSelect: 'text' }}>{dhtCidOfString}</span>
                 </p>
                 <p>Provide status: {peerData[selectedContainer].dhtProvideStatus}</p>
-                <button onClick={() => handleDhtProvide(selectedContainer)}>Provide</button>
               </div>
+
               <div>
                 <div className='input-group'>
                   <label>Find CID Provider: </label>
-                  <input
-                    type='text'
-                    value={dhtFindProviderCid}
-                    onChange={(e) => setDhtFindProviderCid(e.target.value)}
-                  />
+                  <div style={{ display: 'flex' }}>
+                    <input
+                      type='text'
+                      value={dhtFindProviderCid}
+                      onChange={(e) => setDhtFindProviderCid(e.target.value)}
+                    />
 
-                  <button onClick={() => handleDhtFindProvider(selectedContainer)}>Find Providers</button>
+                    <button onClick={() => handleDhtFindProvider(selectedContainer)}>Go</button>
+                  </div>
                 </div>
                 <div>
                   Find Providers results:
@@ -2527,15 +2564,34 @@ export default function Home() {
                 </div>
               </div>
 
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className='input-group'>
+                  <label>Find Peer: </label>
+                  <div style={{ display: 'flex' }}>
+                    <input type='text' value={dhtFindPeer} onChange={(e) => setDhtFindPeer(e.target.value)} />
+
+                    <button onClick={() => handleDhtFindPeer(selectedContainer)}>Go</button>
+                  </div>
+                </div>
+                <div>
+                  Find Peer result:
+                  {peerData[selectedContainer]?.dhtFindPeerResult?.map((p, index) => (
+                    <p key={index} style={{ marginBottom: '0.5rem' }}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
               <h3>Connect</h3>
               <div className='input-group'>
-                <label>
-                  Connect to multiaddr:
-                  <div style={{ display: 'flex' }}>
+                <div style={{ display: 'flex' }}>
+                  <label>
+                    Connect to multiaddr:
                     <input type='text' value={connectMultiaddr} onChange={(e) => setConnectMultiaddr(e.target.value)} />
-                    <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Go</button>
-                  </div>
-                </label>
+                  </label>
+                  <button onClick={() => connectTo(selectedContainer, connectMultiaddr)}>Go</button>
+                </div>
               </div>
               <div className='input-group'>
                 <label>
