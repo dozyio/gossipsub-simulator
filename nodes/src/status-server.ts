@@ -161,7 +161,6 @@ export class StatusServer {
   private handleConnectionEvent = async (evt: CustomEvent) => {
     const connectionList = this.server.getConnections()
     const connections = connectionList.map((connection) => connection.remotePeer.toString())
-
     const remotePeers = await this.getRemotePeers()
 
     await this.sendUpdate({ connections, remotePeers })
@@ -520,7 +519,8 @@ export class StatusServer {
         }
       })
 
-      ws.send(JSON.stringify(await self.deltaUpdate()))
+      // send full update on connection
+      ws.send(JSON.stringify(await self.fullUpdate()))
       self.scheduleUpdate = self.scheduleUpdates()
     })
 

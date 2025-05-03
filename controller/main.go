@@ -169,7 +169,8 @@ func broadcastToClients(data []byte) {
 	clientsMu.Lock()
 	defer clientsMu.Unlock()
 	for c := range clients {
-		if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		err := c.WriteMessage(websocket.TextMessage, data)
+		if err != nil {
 			fmt.Printf("Failed to write message to client: %v\n", err)
 			c.Close()
 			delete(clients, c)
@@ -445,6 +446,7 @@ func setContainerIDAndListen(hostPort int, containerID string) error {
 	for attempt := 1; ; attempt++ {
 		err := setContainerIDViaWebSocketAndListen(hostPort, containerID)
 		if err == nil {
+			fmt.Printf("Successfully set container ID %q via websocket\n", containerID)
 			return nil
 		}
 		lastErr = err
@@ -473,11 +475,13 @@ func setContainerIDViaWebSocketAndListen(hostPort int, containerID string) error
 	}
 
 	// Read the initial message from the container if any
+	// fmt.Printf("Reading initial message from container %s\n", containerID)
 	_, _, err = c.ReadMessage()
 	if err != nil {
 		c.Close()
 		return fmt.Errorf("failed to read initial message: %w", err)
 	}
+	// fmt.Printf("Initial message read from container %s %s\n", containerID, string(b))
 
 	message := map[string]any{
 		"id": containerID,

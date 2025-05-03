@@ -1056,14 +1056,6 @@ export default function Home() {
     y: Math.random() * (CONTAINER_HEIGHT - nodeSize) + nodeSize / 2,
   })
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const areEdgesEqual = (prevConnections: any[], newConnections: any[]) => {
-    if (prevConnections.length !== newConnections.length) return false
-    return prevConnections.every(
-      (conn, index) => conn.from === newConnections[index].from && conn.to === newConnections[index].to,
-    )
-  }
-
   // Function to handle WebSocket messages and update containerData
   const handleNodeStatusUpdate = (data: PeerData) => {
     if (isPeerIdAssignedToContainer(data.peerId)) {
@@ -1183,10 +1175,6 @@ export default function Home() {
 
   const isPeerIdAssignedToContainer = (peerId: string): boolean => {
     return Object.values(peerData).some((pd) => pd.peerId === peerId)
-  }
-
-  const isRemotePeerConnectedToContainer = (remotePeerId: string): boolean => {
-    return Object.values(peerData).some((pd) => pd.remotePeers.hasOwnProperty(remotePeerId))
   }
 
   const allNodes = useMemo(() => {
@@ -2126,7 +2114,7 @@ export default function Home() {
             {mapView === 'graph' && (
               <div>
                 <svg className='edges'>
-                  {edges.map((conn, index) => {
+                  {edgesRef.current.map((conn, index) => {
                     const fromNode = allNodes[conn.from]
                     const toNode = allNodes[conn.to]
                     if (!fromNode || !toNode) return null
