@@ -454,7 +454,6 @@ func (ss *StatusServer) broadcastUpdate(update *Update) {
 
 	// Iterate over all clients and try to send the message.
 	for c := range ss.clients {
-		fmt.Printf("sending update to client %s %+v\n", c.RemoteAddr().String(), string(data))
 		err := c.WriteMessage(websocket.TextMessage, data)
 		if err != nil {
 			// If writing fails, the client has likely disconnected.
