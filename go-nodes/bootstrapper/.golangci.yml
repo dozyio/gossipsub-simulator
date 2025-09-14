@@ -1,0 +1,173 @@
+version: "2"
+run:
+  modules-download-mode: readonly
+  issues-exit-code: 0
+  tests: true
+  allow-parallel-runners: true
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - dogsled
+    - dupl
+    - durationcheck
+    - errcheck
+    - errname
+    - funlen
+    - gocheckcompilerdirectives
+    - gochecknoinits
+    - goconst
+    - gocritic
+    - gocyclo
+    - goprintffuncname
+    - gosec
+    - govet
+    - ineffassign
+    - ireturn
+    - makezero
+    - mirror
+    - misspell
+    - nakedret
+    - nestif
+    - nilerr
+    - noctx
+    - nolintlint
+    - nosprintfhostport
+    - prealloc
+    - predeclared
+    - promlinter
+    - rowserrcheck
+    - sloglint
+    - staticcheck
+    - testifylint
+    - testpackage
+    - unconvert
+    - unparam
+    - unused
+    - whitespace
+  settings:
+    dogsled:
+      max-blank-identifiers: 2
+    dupl:
+      threshold: 150
+    errcheck:
+      check-type-assertions: true
+      check-blank: true
+    funlen:
+      lines: -1
+      statements: 60
+      ignore-comments: true
+    goconst:
+      min-len: 2
+      min-occurrences: 3
+    gocritic:
+      disabled-checks:
+        - dupImport
+        - ifElseChain
+        - octalLiteral
+        - commentedOutCode
+      enabled-tags:
+        - diagnostic
+        - style
+    gocyclo:
+      min-complexity: 17
+    govet:
+      enable:
+        - shadow
+        - appends
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+        shadow:
+          strict: false
+    lll:
+      line-length: 120
+      tab-width: 1
+    mnd:
+      checks:
+        - argument
+        - case
+        - condition
+        - return
+      ignored-numbers:
+        - "0"
+        - "1"
+        - "2"
+        - "100"
+        - "0666"
+        - "0o600"
+        - "0755"
+        - "0o755"
+      ignored-functions:
+        - strings.SplitN
+    nestif:
+      min-complexity: 6
+    nolintlint:
+      require-explanation: false
+      require-specific: false
+      allow-unused: true
+    revive:
+      rules:
+        - name: var-naming
+          arguments:
+            - - ID
+              - HTTP
+              - JSON
+              - API
+              - URL
+              - URI
+            - - ""
+            - - skipPackageNameChecks: true
+          severity: warning
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - dupl
+          - errcheck
+          - gocyclo
+          - gosec
+          - mnd
+        path: _test\.go
+      - linters:
+          - lll
+        source: "^//go:generate "
+      - linters:
+          - goconst
+        path: (.+)_test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+issues:
+  max-same-issues: 0
+severity:
+  default: error
+  rules:
+    - linters:
+        - err113
+        - funlec
+        - gocyclo
+        - ireturn
+        - lll
+        - prealloc
+      severity: warning
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

@@ -25,6 +25,8 @@ import {
   bootstrapper1PeerId,
   bootstrapper2Ma,
   bootstrapper2PeerId,
+  bootstrapper3Ma,
+  bootstrapper3PeerId,
   firstMessageDeliveriesCap,
   firstMessageDeliveriesDecay,
   firstMessageDeliveriesWeight,
@@ -242,15 +244,23 @@ import { plaintext } from '@libp2p/plaintext'
       server.services.pubsub.subscribe(topics[i])
     }
 
+    // connect to bootstrappers
     try {
       await server.dial(multiaddr(bootstrapper1Ma), { signal: AbortSignal.timeout(10_000) })
     } catch (e) {
       console.log('Error dialing bootstrapper1 peer', e)
     }
+
     try {
       await server.dial(multiaddr(bootstrapper2Ma), { signal: AbortSignal.timeout(10_000) })
     } catch (e) {
       console.log('Error dialing bootstrapper2 peer', e)
+    }
+
+    try {
+      await server.dial(multiaddr(bootstrapper3Ma), { signal: AbortSignal.timeout(10_000) })
+    } catch (e) {
+      console.log('Error dialing bootstrapper3 peer', e)
     }
 
     // refresh peers via bootstrapper 1
@@ -300,6 +310,32 @@ import { plaintext } from '@libp2p/plaintext'
             return
           }
           console.log('connected to bootstrapper2')
+        } catch (e) {
+          console.log(e)
+        }
+      }
+    }, 20_000)
+
+    // refresh peers via bootstrapper 3
+    setInterval(async () => {
+      if ((server.services.pubsub as GossipSub).getMeshPeers.length >= (server.services.pubsub as GossipSub).opts.D) {
+        return
+      }
+      let hasBootstrapperConn = false
+
+      server.getConnections(peerIdFromString(bootstrapper3PeerId)).forEach((conn) => {
+        hasBootstrapperConn = true
+      })
+
+      if (!hasBootstrapperConn) {
+        try {
+          console.log('dialing bootstrapper3...')
+          const bsConn = await server.dial(multiaddr(bootstrapper3Ma), { signal: AbortSignal.timeout(5_000) })
+          if (!bsConn) {
+            console.log('no connection')
+            return
+          }
+          console.log('connected to bootstrapper3')
         } catch (e) {
           console.log(e)
         }

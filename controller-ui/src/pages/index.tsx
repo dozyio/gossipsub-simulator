@@ -299,10 +299,6 @@ export default function Home() {
       env.push('DHTPUBLIC=true')
     }
 
-    // if (dhtAllowPrivate) {
-    //   env.push('DHTPRIVATE=true')
-    // }
-
     if (debugContainer) {
       env.push(debugStr)
     }
@@ -378,6 +374,15 @@ export default function Home() {
     env = envSetter(env, true)
 
     await startContainer('bootstrapper:dev', env, 'bootstrapper2')
+  }
+
+  const handleStartBootstrap3 = async (): Promise<void> => {
+    // 12D3KooWD6d3jiuv2fuSDTBH2eWZN8aYYKzHTrquZF4dta1BYEgB
+    let env = ['SEED=0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd3']
+
+    env = envSetter(env, true)
+
+    await startContainer('bootstrapper-go:dev', env, 'bootstrapper3')
   }
 
   // Function to start a new container
@@ -1231,9 +1236,12 @@ export default function Home() {
               setContainers(runningContainers)
               initializeContainerData(runningContainers)
               break
+
             case 'nodeStatus':
+              console.log('Received raw nodeStatus from backend:', json)
               handleNodeStatusUpdate(json)
               break
+
             default:
               console.log('Controller WebSocket: unknown type', json.mType)
           }
@@ -1721,12 +1729,6 @@ export default function Home() {
           <h3>Container Settings</h3>
           <div className='input-group'>
             <label>
-              Image name:
-              <input type='text' value={imageName} onChange={(e) => setImageName(e.target.value)} />
-            </label>
-          </div>
-          <div className='input-group'>
-            <label>
               PubSub Topics (comma sep):
               <input type='text' value={topicsName} onChange={(e) => setTopicsName(e.target.value)} />
             </label>
@@ -1898,14 +1900,39 @@ export default function Home() {
             </label>
           </div>
 
-          <h3>Containers</h3>
+          <h3>Nodes</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0px 10px' }}>
-            <div style={{ display: 'flex', gap: '0px 15px' }}>
-              <button onClick={handleStartBootstrap1}>Bootstrap 1</button>
-              <button onClick={handleStartBootstrap2}>Bootstrap 2</button>
+            <h4>Start Bootstrappers</h4>
+            <div style={{ display: 'flex', gap: '0px 15px', width: '100%' }}>
+              <button style={{ flexGrow: 1 }} onClick={handleStartBootstrap1}>
+                1 (JS)
+              </button>
+              <button style={{ flexGrow: 1 }} onClick={handleStartBootstrap2}>
+                2 (JS)
+              </button>
+              <button
+                title='Work in progress, bootstraps but limited functionality and reporting'
+                style={{ flexGrow: 1 }}
+                onClick={handleStartBootstrap3}
+              >
+                3* (Go)
+              </button>
             </div>
-            <button onClick={handleStartContainer}>Container</button>
-            <button onClick={() => handleStartXContainers(10)}>10 Containers</button>
+            <h4>Start Nodes</h4>
+            <div className='input-group'>
+              <label>
+                Image name:
+                <input type='text' value={imageName} onChange={(e) => setImageName(e.target.value)} />
+              </label>
+            </div>
+            <div style={{ display: 'flex', gap: '0px 15px', width: '100%' }}>
+              <button style={{ flexGrow: 1 }} onClick={handleStartContainer}>
+                1 Node
+              </button>
+              <button style={{ flexGrow: 1 }} onClick={() => handleStartXContainers(10)}>
+                10 Nodes
+              </button>
+            </div>
           </div>
 
           <div style={{ display: 'flex', gap: '0px 10px' }}>
@@ -2667,6 +2694,11 @@ export default function Home() {
                   {Object.entries(peerData[selectedContainer]?.subscribersList || {}).map(([topic, peers]) => (
                     <div key={topic} style={{ marginLeft: '1rem' }}>
                       {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                      {peers?.map((p, index) => (
+                        <p key={index} style={{ marginLeft: '1.2rem', marginBottom: '0.5rem' }}>
+                          {p}
+                        </p>
+                      ))}
                     </div>
                   ))}
                 </div>

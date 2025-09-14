@@ -3,8 +3,9 @@ NETWORK:=p2p-net-overlay
 .PHONY: build ui controller stop
 
 build:
-	cd nodes && make build
+	cd js-nodes && make build
 	cd legacy-nodes && make build
+	cd go-nodes && make build
 
 ui:
 	cd controller-ui && npm run dev
@@ -12,7 +13,7 @@ ui:
 net:
 	@# If we’re not already a Swarm manager, initialize Swarm
 	@# Swarm allows for 40+ containers running without ARP issues
-	@# Fixes neighbour: arp_cache: neighbor table overflow!
+	@# Fixes `neighbour: arp_cache: neighbor table overflow!`
 	@if [ "$$(docker info --format '{{.Swarm.ControlAvailable}}' 2>/dev/null)" != "true" ]; then \
 	  echo "Node is not a Swarm manager — initializing Swarm..."; \
 	  docker swarm init; \

@@ -24,6 +24,8 @@ import {
   bootstrapper1PeerId,
   bootstrapper2Ma,
   bootstrapper2PeerId,
+  bootstrapper3Ma,
+  bootstrapper3PeerId,
   firstMessageDeliveriesCap,
   firstMessageDeliveriesDecay,
   firstMessageDeliveriesWeight,
@@ -186,6 +188,10 @@ import { plaintext } from '@libp2p/plaintext'
           id: peerIdFromString(bootstrapper2PeerId),
           addrs: [multiaddr(bootstrapper2Ma)],
         },
+        {
+          id: peerIdFromString(bootstrapper3PeerId),
+          addrs: [multiaddr(bootstrapper3Ma)],
+        },
       ]
     }
     if (seed === '0xddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd2') {
@@ -193,6 +199,10 @@ import { plaintext } from '@libp2p/plaintext'
         {
           id: peerIdFromString(bootstrapper1PeerId),
           addrs: [multiaddr(bootstrapper1Ma)],
+        },
+        {
+          id: peerIdFromString(bootstrapper3PeerId),
+          addrs: [multiaddr(bootstrapper3Ma)],
         },
       ]
     }
