@@ -10,6 +10,7 @@ import (
 	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/node"
 	"github.com/gorilla/websocket"
 	logging "github.com/ipfs/go-log/v2"
+	pubsub "github.com/libp2p/go-libp2p-pubsub"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/tidwall/gjson"
 )
@@ -48,34 +49,36 @@ const (
 	DHTProvideError      DHTProvideStatus = "error"
 	DHTProvideInProgress DHTProvideStatus = "inprogress"
 	DHTProvideDone       DHTProvideStatus = "done"
+	language                              = "go"
 )
 
 type TopicsPeers map[string][]string
 
 type Update struct {
 	ContainerId           string           `json:"containerId"`
-	PeerId                string           `json:"peerId"`
-	Type                  string           `json:"type"`
-	SubscribersList       TopicsPeers      `json:"subscribersList"`
-	PubsubPeers           []string         `json:"pubsubPeers"`
-	MeshPeersList         TopicsPeers      `json:"meshPeersList"`
-	FanoutList            TopicsPeers      `json:"fanoutList"`
-	Libp2pPeers           []string         `json:"libp2pPeers"`
-	Connections           []string         `json:"connections"`
-	RemotePeers           RemotePeers      `json:"remotePeers"`
-	Protocols             []string         `json:"protocols"`
-	Streams               Streams          `json:"streams"`
-	Multiaddrs            []string         `json:"multiaddrs"`
-	Topics                []string         `json:"topics"`
-	DhtPeers              []string         `json:"dhtPeers"`
-	DhtProvideStatus      DHTProvideStatus `json:"dhtProvideStatus"`
-	DhtFindProviderResult []string         `json:"dhtFindProviderResult"`
-	DhtFindPeerResult     []string         `json:"dhtFindPeerResult"`
-	LastMessage           string           `json:"lastMessage"`
-	MessageCount          int              `json:"messageCount"`
-	PeerScores            PeerScores       `json:"peerScores"`
-	RTTs                  RTTs             `json:"rtts"`
-	ConnectTime           int64            `json:"connectTime"`
+	PeerId                string           `json:"peerId,omitzero"`
+	Type                  string           `json:"type,omitzero"`
+	Lang                  string           `json:"lang,omitzero"`
+	SubscribersList       TopicsPeers      `json:"subscribersList,omitzero"`
+	PubsubPeers           []string         `json:"pubsubPeers,omitzero"`
+	MeshPeersList         TopicsPeers      `json:"meshPeersList,omitzero"`
+	FanoutList            TopicsPeers      `json:"fanoutList,omitzero"`
+	Libp2pPeers           []string         `json:"libp2pPeers,omitzero"`
+	Connections           []string         `json:"connections,omitzero"`
+	RemotePeers           RemotePeers      `json:"remotePeers,omitzero"`
+	Protocols             []string         `json:"protocols,omitzero"`
+	Streams               Streams          `json:"streams,omitzero"`
+	Multiaddrs            []string         `json:"multiaddrs,omitzero"`
+	Topics                []string         `json:"topics,omitzero"`
+	DhtPeers              []string         `json:"dhtPeers,omitzero"`
+	DhtProvideStatus      DHTProvideStatus `json:"dhtProvideStatus,omitzero"`
+	DhtFindProviderResult []string         `json:"dhtFindProviderResult,omitzero"`
+	DhtFindPeerResult     []string         `json:"dhtFindPeerResult,omitzero"`
+	LastMessage           string           `json:"lastMessage,omitzero"`
+	MessageCount          int              `json:"messageCount,omitzero"`
+	PeerScores            PeerScores       `json:"peerScores,omitzero"`
+	RTTs                  RTTs             `json:"rtts,omitzero"`
+	ConnectTime           int64            `json:"connectTime,omitzero"`
 }
 
 type StatusServer struct {
@@ -268,8 +271,20 @@ func (ss *StatusServer) handleConnectionEvent() {
 	// Handle connection event
 }
 
-func (ss *StatusServer) handlePubsubMessageEvent() {
-	// Handle pubsub message
+func (ss *StatusServer) HandlePubsubMessageEvent(msg *pubsub.Message) error {
+	ss.log.Infof("handle pubsub message event %+v", string(msg.Data))
+	ss.LastMessage = string(msg.Data)
+	ss.MessageCount++
+
+	update := &Update{
+		ContainerId:  ss.ContainerId,
+		LastMessage:  ss.LastMessage,
+		MessageCount: ss.MessageCount,
+	}
+
+	ss.broadcastUpdate(update)
+
+	return nil
 }
 
 func (ss *StatusServer) getRemotePeers() (*RemotePeers, error) {
@@ -367,6 +382,7 @@ func (ss *StatusServer) fullUpdate() (*Update, error) {
 		ContainerId:           ss.ContainerId,
 		PeerId:                ss.Node.Host.ID().String(),
 		Type:                  ss.Type,
+		Lang:                  language,
 		SubscribersList:       subscribersList,
 		MeshPeersList:         meshPeersList,
 		Libp2pPeers:           peers,
@@ -380,8 +396,8 @@ func (ss *StatusServer) fullUpdate() (*Update, error) {
 		DhtProvideStatus:      "",
 		DhtFindProviderResult: []string{},
 		DhtFindPeerResult:     []string{},
-		LastMessage:           "",
-		MessageCount:          0,
+		LastMessage:           ss.LastMessage,
+		MessageCount:          ss.MessageCount,
 		PeerScores:            PeerScores{},
 		RTTs:                  rtts,
 		ConnectTime:           0,
@@ -407,27 +423,51 @@ func (ss *StatusServer) sendUpdate(c *websocket.Conn, update *Update) error {
 // Schedule periodic updates
 func (ss *StatusServer) scheduleUpdates() {
 	go func() {
-		for {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+
+		for range ticker.C {
 			u, err := ss.fullUpdate()
 			if err != nil {
-				ss.log.Warnf("error getting full update", err)
-				return
+				ss.log.Warnf("error getting full update for periodic broadcast: %s", err)
+				// continue to the next tick instead of exiting the goroutine
+				continue
 			}
 
-			ss.clientsMu.Lock()
-			for c := range ss.clients {
-				err := ss.sendUpdate(c, u)
-				if err != nil {
-					fmt.Printf("Failed to write message to client %s: %v\n", c.RemoteAddr().String(), err)
-					c.Close()
-					delete(ss.clients, c)
-				}
-			}
-			ss.clientsMu.Unlock()
-
-			time.Sleep(5 * time.Second)
+			ss.broadcastUpdate(u)
 		}
 	}()
+}
+
+func (ss *StatusServer) broadcastUpdate(update *Update) {
+	data, err := json.Marshal(update)
+	if err != nil {
+		ss.log.Warnf("error marshaling update for broadcast: %s", err)
+		return
+	}
+
+	ss.clientsMu.Lock()
+	defer ss.clientsMu.Unlock()
+
+	// Create a list to hold connections that are no longer active.
+	var failedConns []*websocket.Conn
+
+	// Iterate over all clients and try to send the message.
+	for c := range ss.clients {
+		fmt.Printf("sending update to client %s %+v\n", c.RemoteAddr().String(), string(data))
+		err := c.WriteMessage(websocket.TextMessage, data)
+		if err != nil {
+			// If writing fails, the client has likely disconnected.
+			// Add it to our list of failed connections to be removed later.
+			ss.log.Debugf("Failed to write message to client %s, scheduling for removal: %v", c.RemoteAddr().String(), err)
+			failedConns = append(failedConns, c)
+		}
+	}
+
+	for _, c := range failedConns {
+		c.Close()
+		delete(ss.clients, c)
+	}
 }
 
 func (ss *StatusServer) getStreams() Streams {
@@ -446,7 +486,6 @@ func (ss *StatusServer) getSubscribersList() TopicsPeers {
 	topicsPeers := make(TopicsPeers)
 
 	peers := ss.Node.Topic.ListPeers()
-	ss.log.Infof("subscribers topiclistpeers peers: len: %d, %+v", len(peers), peers)
 
 	var peerIds []string
 	for _, p := range peers {
@@ -454,8 +493,6 @@ func (ss *StatusServer) getSubscribersList() TopicsPeers {
 	}
 
 	topicsPeers[ss.Node.Topic.String()] = peerIds
-
-	ss.log.Infof("subscribers peers: %+v", topicsPeers)
 
 	return topicsPeers
 }

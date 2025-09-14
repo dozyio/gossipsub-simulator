@@ -58,6 +58,7 @@ interface PeerData {
   containerId: string
   id: string // Unique identifier
   peerId: string
+  lang: string
   tcpdumping: boolean
   pubsubPeers: string[]
   subscribersList: Record<string, string[]>
@@ -226,6 +227,7 @@ export default function Home() {
             containerId: container.id,
             id: container.id,
             peerId: '',
+            lang: '',
             tcpdumping: false,
             pubsubPeers: [],
             subscribersList: {},
@@ -2675,17 +2677,19 @@ export default function Home() {
               <div>Connect+perf: {Math.round(peerData[selectedContainer]?.connectTime)}ms</div>
               <div>Received Pubsub: {peerData[selectedContainer]?.messageCount}</div>
               <div>Mesh Peers:</div>
-              {Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
-                <div>
-                  {Object.entries(peerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
-                    <div key={topic} style={{ marginLeft: '1rem' }}>
-                      {topic}: {Array.isArray(peers) ? peers.length : 0} peers
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div>No mesh peers available for topics.</div>
-              )}
+              {peerData[selectedContainer].lang == 'js' &&
+                (Object.keys(peerData[selectedContainer]?.meshPeersList || {}).length > 0 ? (
+                  <div>
+                    {Object.entries(peerData[selectedContainer]?.meshPeersList || {}).map(([topic, peers]) => (
+                      <div key={topic} style={{ marginLeft: '1rem' }}>
+                        {topic}: {Array.isArray(peers) ? peers.length : 0} peers
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div>No mesh peers available for topics.</div>
+                ))}
+              {peerData[selectedContainer].lang == 'go' && <div style={{ marginLeft: '1rem' }}>Unsupported</div>}
               {/* <div>Outbound Edges: {edges.filter(conn => conn.from === selectedContainer).length}</div> */}
               {/* <div>Inbound Edges: {edges.filter(conn => conn.to === selectedContainer).length}</div> */}
               <div>Subscribers</div>
@@ -2714,8 +2718,14 @@ export default function Home() {
                 ))}
               </div>
               <div>Libp2p Peer Store: {peerData[selectedContainer]?.libp2pPeers?.length}</div>
-              <div>Pubsub Peer Store: {peerData[selectedContainer]?.pubsubPeers?.length}</div>
-              <div>DHT Peer Store: {peerData[selectedContainer]?.dhtPeers?.length}</div>
+              <div>
+                Pubsub Peer Store: {peerData[selectedContainer]?.lang == 'go' && <>Unsupported</>}
+                {peerData[selectedContainer]?.lang == 'js' && peerData[selectedContainer]?.pubsubPeers?.length}
+              </div>
+              <div>
+                DHT Peer Store: {peerData[selectedContainer]?.lang == 'go' && <>Unsupported</>}
+                {peerData[selectedContainer]?.lang == 'js' && peerData[selectedContainer]?.dhtPeers?.length}
+              </div>
               <div>
                 Protocols:{' '}
                 {peerData[selectedContainer]?.protocols?.map((p, index) => (

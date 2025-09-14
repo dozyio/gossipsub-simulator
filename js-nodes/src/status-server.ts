@@ -49,10 +49,13 @@ type DHTProvideStatus = null | 'error' | 'inprogress' | 'done'
 
 type TopicsPeers = Record<string, string[]>
 
+const language = 'js'
+
 export interface Update {
   containerId?: string
   peerId?: string
   type?: string
+  lang?: string
   subscribersList?: TopicsPeers
   pubsubPeers?: string[]
   meshPeersList?: TopicsPeers
@@ -80,6 +83,7 @@ export class StatusServer {
   private server: Libp2pType
   private type: string
   private peerId: PeerId
+  private lang: string = language
   private topics: string[]
   private containerId: string = ''
   private perfBytes: number = 0
@@ -765,6 +769,8 @@ export class StatusServer {
     const type = this.type
     this.lastType = type
     update.type = type
+
+    update.lang = this.lang
 
     // const topic = this.topic
     // this.lastTopic = topic

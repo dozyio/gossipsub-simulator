@@ -54,7 +54,7 @@ func (g *Gossip) JoinSubscribe(
 		return nil, nil, fmt.Errorf("topic.Subscribe %w", err)
 	}
 
-	// Read loop for the topic, adding peers to connection manager
+	// Read loop for the topic, adding peers to connection manager and message processing
 	go func() {
 		for {
 			msg, err2 := topicSub.Next(ctx)
@@ -71,7 +71,6 @@ func (g *Gossip) JoinSubscribe(
 				continue
 			}
 
-			// logger.Debugf("Gossip (%s) Received message from %s", gossipTopic, msg.ReceivedFrom.String())
 			g.h.ConnManager().TagPeer(msg.ReceivedFrom, gossipTopic, connectionWeight)
 
 			if msgProcessor != nil {
@@ -85,25 +84,3 @@ func (g *Gossip) JoinSubscribe(
 
 	return topic, topicSub, err
 }
-
-// // pinger sends a ping message to the network every x seconds.
-// func Pinger(ctx context.Context, topic *pubsub.Topic, text string, interval time.Duration, logger logging.EventLogger) {
-// 	go func() {
-// 		for {
-// 			select {
-// 			case <-ctx.Done():
-// 				logger.Infof("Gossipsub %s pinger stopped", topic.String())
-// 				return
-// 			default:
-// 				logger.Infof("Gossipsub pinging %s", topic.String())
-//
-// 				err := topic.Publish(ctx, []byte(text))
-// 				if err != nil {
-// 					logger.Warn(err)
-// 				}
-//
-// 				time.Sleep(interval)
-// 			}
-// 		}
-// 	}()
-// }

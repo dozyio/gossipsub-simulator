@@ -3,13 +3,9 @@ package node
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/config"
-	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/consts"
-	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/gossip"
 	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/interfaces"
-	"github.com/dozyio/gossipsub-simulator/go-nodes/bootstrapper/internal/utils"
 	"github.com/ipfs/boxo/blockservice"
 	"github.com/ipfs/boxo/blockstore"
 	exchange "github.com/ipfs/boxo/exchange"
@@ -100,58 +96,6 @@ func New(
 		Topic:            &pubsub.Topic{},
 		TopicRelayCancel: nil,
 		TopicSub:         &pubsub.Subscription{},
-	}
-
-	if len(cfg.Topics) > 0 {
-		// Setup gossipsub
-		bootstrapper1PeerId := "12D3KooWJwYWjPLsTKiZ7eMjDagCZh9Fqt1UERLKoPb5QQNByrAF"
-		bootstrapper1Ma := "/dns/bootstrapper1/tcp/42069/p2p/" + bootstrapper1PeerId
-
-		bootstrapper2PeerId := "12D3KooWAfBVdmphtMFPVq3GEpcg3QMiRbrwD9mpd6D6fc4CswRw"
-		bootstrapper2Ma := "/dns/bootstrapper2/tcp/42069/p2p/" + bootstrapper2PeerId
-
-		directPeers := utils.StringSliceToAddrInfoSlice([]string{bootstrapper1Ma, bootstrapper2Ma})
-
-		gossipSubOpts := []pubsub.Option{
-			pubsub.WithPeerScore(gossip.PeerScoringParams()),
-			pubsub.WithDirectPeers(directPeers),
-			pubsub.WithDirectConnectTicks(30),
-		}
-
-		gossipSub, err := gossip.New(ctx, h, gossipSubOpts...)
-		if err != nil {
-			logger.Errorf("gossip.New %s", err)
-			os.Exit(1)
-		}
-
-		topicOpts := []pubsub.TopicOpt{}
-
-		subOpts := []pubsub.SubOpt{}
-
-		topicScoreParams := gossip.BootstrapperTopicScoreParams()
-
-		gossipMsgHandler := func(m *pubsub.Message) error {
-			logger.Infof("Received gossipsub message from %s: %s\n", m.GetFrom(), m.Data)
-
-			return nil
-		}
-
-		// only join first topic for now
-		topic, topicSub, err := gossipSub.JoinSubscribe(ctx, cfg.Topics[0], consts.GossipPeerWeight, topicOpts, subOpts, topicScoreParams, gossipMsgHandler, logger)
-		if err != nil {
-			logger.Errorf("NewGossipSub %s", err)
-			os.Exit(1)
-		}
-
-		topicRelayCancel, err := topic.Relay()
-		if err != nil {
-			logger.Errorf("error relaying for %s: %s", topic.String(), err)
-			os.Exit(1)
-		}
-
-		node.Topic = topic
-		node.TopicRelayCancel = topicRelayCancel
-		node.TopicSub = topicSub
 	}
 
 	return node, nil
