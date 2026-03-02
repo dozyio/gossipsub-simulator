@@ -69,6 +69,10 @@ interface PeerData {
   dhtProvideStatus: string
   dhtFindProviderResult: string[]
   dhtFindPeerResult: string[]
+  dhtPutStatus: string
+  dhtPutResult: string[]
+  dhtGetStatus: string
+  dhtGetResult: string[]
   connections: string[] // peer ids of connections
   remotePeers: RemotePeers
   protocols: string[]
@@ -181,6 +185,9 @@ export default function Home() {
   const [dhtCidOfString, setDhtCidOfString] = useState<string>('')
   const [dhtFindProviderCid, setDhtFindProviderCid] = useState<string>('')
   const [dhtFindPeer, setDhtFindPeer] = useState<string>('')
+  const [dhtPutKey, setDhtPutKey] = useState<string>('')
+  const [dhtPutValue, setDhtPutValue] = useState<string>('')
+  const [dhtGetKey, setDhtGetKey] = useState<string>('')
 
   /// gossip stuff
   const [trackConverge, setTrackConverge] = useState<boolean>(false)
@@ -238,6 +245,10 @@ export default function Home() {
             dhtProvideStatus: '',
             dhtFindProviderResult: [],
             dhtFindPeerResult: [],
+            dhtPutStatus: '',
+            dhtPutResult: [],
+            dhtGetStatus: '',
+            dhtGetResult: [],
             connections: [],
             remotePeers: {},
             protocols: [],
@@ -753,6 +764,74 @@ export default function Home() {
       }
     } catch (error) {
       console.error('Error findPeer:', error)
+    }
+  }
+
+  const handleDhtPut = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      key: string
+      value: string
+      container_id: string
+    }
+
+    const body: Body = {
+      key: dhtPutKey,
+      value: dhtPutValue,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/put`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error dht put: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error dht put:', error)
+    }
+  }
+
+  const handleDhtGet = async (containerId: string = ''): Promise<void> => {
+    if (containers.length === 0) {
+      return
+    }
+
+    interface Body {
+      key: string
+      container_id: string
+    }
+
+    const body: Body = {
+      key: dhtGetKey,
+      container_id: containerId,
+    }
+
+    try {
+      const response = await fetch(`${ENDPOINT}/dht/get`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      })
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        throw new Error(`Error dht get: ${errorText}`)
+      }
+    } catch (error) {
+      console.error('Error dht get:', error)
     }
   }
 
@@ -1720,7 +1799,7 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>GossipSub Simulator</title>
+        <title>Libp2p Playground</title>
         <meta name='description' content='Manage Docker containers' />
         <meta name='viewport' content='width=device-width, initial-scale=1' />
         <link rel='icon' href='/favicon.ico' />
@@ -2453,7 +2532,7 @@ export default function Home() {
 
         {/* Sidebar 2: Information and Actions */}
         <div className='sidebar sidebar2'>
-          <h1>GossipSub Simulator</h1>
+          <h1>Libp2p Playground</h1>
           <button onClick={handleClickType} style={{ backgroundColor: clickType === 'kill' ? 'red' : '#0070f3' }}>
             Clicks: {clickType}
           </button>
@@ -2593,6 +2672,60 @@ export default function Home() {
                 <div>
                   Find Peer result:
                   {peerData[selectedContainer]?.dhtFindPeerResult?.map((p, index) => (
+                    <p key={index} style={{ marginBottom: '0.5rem' }}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className='input-group'>
+                  <label>DHT Put: </label>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                    <input
+                      type='text'
+                      placeholder='key'
+                      value={dhtPutKey}
+                      onChange={(e) => setDhtPutKey(e.target.value)}
+                    />
+                    <div style={{ display: 'flex' }}>
+                      <input
+                        type='text'
+                        placeholder='value'
+                        value={dhtPutValue}
+                        onChange={(e) => setDhtPutValue(e.target.value)}
+                      />
+                      <button onClick={() => handleDhtPut(selectedContainer)}>Go</button>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  Put status: {peerData[selectedContainer]?.dhtPutStatus}
+                  {peerData[selectedContainer]?.dhtPutResult?.map((p, index) => (
+                    <p key={index} style={{ marginBottom: '0.5rem' }}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
+              </div>
+
+              <div style={{ marginTop: '0.5rem' }}>
+                <div className='input-group'>
+                  <label>DHT Get: </label>
+                  <div style={{ display: 'flex' }}>
+                    <input
+                      type='text'
+                      placeholder='key'
+                      value={dhtGetKey}
+                      onChange={(e) => setDhtGetKey(e.target.value)}
+                    />
+                    <button onClick={() => handleDhtGet(selectedContainer)}>Go</button>
+                  </div>
+                </div>
+                <div>
+                  Get status: {peerData[selectedContainer]?.dhtGetStatus}
+                  {peerData[selectedContainer]?.dhtGetResult?.map((p, index) => (
                     <p key={index} style={{ marginBottom: '0.5rem' }}>
                       {p}
                     </p>

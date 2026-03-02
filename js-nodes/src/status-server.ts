@@ -45,7 +45,8 @@ interface RemotePeers {
   [peerId: string]: RemotePeer
 }
 
-type DHTProvideStatus = null | 'error' | 'inprogress' | 'done'
+type DHTStatus = null | 'error' | 'inprogress' | 'done'
+type DHTProvideStatus = DHTStatus
 
 type TopicsPeers = Record<string, string[]>
 
@@ -71,6 +72,10 @@ export interface Update {
   dhtProvideStatus?: DHTProvideStatus
   dhtFindProviderResult?: string[]
   dhtFindPeerResult?: string[]
+  dhtPutStatus?: DHTStatus
+  dhtPutResult?: string[]
+  dhtGetStatus?: DHTStatus
+  dhtGetResult?: string[]
   lastMessage?: string
   messageCount?: number
   peerScores?: PeerScores
@@ -117,6 +122,11 @@ export class StatusServer {
   private dhtFindProviderSignalController: AbortController | undefined = undefined
   private lastDhtFindPeerResult: string[] = []
   private dhtFindPeerSignalController: AbortController | undefined = undefined
+  private lastDhtPutStatus: DHTStatus = null
+  private lastDhtPutResult: string[] = []
+  private lastDhtGetStatus: DHTStatus = null
+  private lastDhtGetResult: string[] = []
+  private dhtGetSignalController: AbortController | undefined = undefined
 
   // perf
   private connectTime: number = 0
@@ -497,7 +507,7 @@ export class StatusServer {
               const multiaddrs = peerInfo.multiaddrs.map((ma) => ma.toString())
               self.lastDhtFindPeerResult = multiaddrs
 
-              await self.sendUpdate({ dhtFindProviderResult: self.lastDhtFindProviderResult })
+              await self.sendUpdate({ dhtFindPeerResult: self.lastDhtFindPeerResult })
             } catch (e: any) {
               if (e.name === 'QueryAbortedError') {
                 console.log('dhtFindPeer aborted')
@@ -517,6 +527,153 @@ export class StatusServer {
             }
             break
           }
+
+          case 'dhtput': {
+            console.log('dhtput msg', newMessage)
+
+            const key = newMessage.message.key?.trim()
+            const value = newMessage.message.value ?? ''
+
+            if (key === undefined || key === '') {
+              self.lastDhtPutStatus = 'error'
+              self.lastDhtPutResult = ['invalid key']
+              await self.sendUpdate({
+                dhtPutStatus: self.lastDhtPutStatus,
+                dhtPutResult: self.lastDhtPutResult,
+              })
+              break
+            }
+
+            self.lastDhtPutStatus = 'inprogress'
+            self.lastDhtPutResult = ['storing']
+            await self.sendUpdate({
+              dhtPutStatus: self.lastDhtPutStatus,
+              dhtPutResult: self.lastDhtPutResult,
+            })
+
+            try {
+              const dht = self.server.services.dht as any
+              if (!dht || typeof dht.put !== 'function') {
+                throw new Error('dht put unsupported')
+              }
+
+              const keyBytes = fromString(key)
+              const valueBytes = fromString(value)
+
+              let queryError: Error | undefined
+              for await (const event of dht.put(keyBytes, valueBytes)) {
+                if (event?.name === 'QUERY_ERROR' && event.error != null) {
+                  queryError = event.error
+                }
+              }
+
+              if (queryError != null) {
+                throw queryError
+              }
+
+              self.lastDhtPutStatus = 'done'
+              self.lastDhtPutResult = [`stored ${key}`, `bytes ${valueBytes.length}`]
+              await self.sendUpdate({
+                dhtPutStatus: self.lastDhtPutStatus,
+                dhtPutResult: self.lastDhtPutResult,
+              })
+            } catch (e: any) {
+              self.lastDhtPutStatus = 'error'
+              self.lastDhtPutResult = [`error ${e?.message ?? e}`]
+              await self.sendUpdate({
+                dhtPutStatus: self.lastDhtPutStatus,
+                dhtPutResult: self.lastDhtPutResult,
+              })
+            }
+
+            break
+          }
+
+          case 'dhtget': {
+            console.log('dhtget msg', newMessage)
+
+            const key = newMessage.message.key?.trim()
+
+            if (key === undefined || key === '') {
+              self.lastDhtGetStatus = 'error'
+              self.lastDhtGetResult = ['invalid key']
+              await self.sendUpdate({
+                dhtGetStatus: self.lastDhtGetStatus,
+                dhtGetResult: self.lastDhtGetResult,
+              })
+              break
+            }
+
+            if (self.dhtGetSignalController) {
+              self.dhtGetSignalController.abort()
+            }
+
+            self.lastDhtGetStatus = 'inprogress'
+            self.lastDhtGetResult = ['searching']
+            await self.sendUpdate({
+              dhtGetStatus: self.lastDhtGetStatus,
+              dhtGetResult: self.lastDhtGetResult,
+            })
+
+            try {
+              const dht = self.server.services.dht as any
+              if (!dht || typeof dht.get !== 'function') {
+                throw new Error('dht get unsupported')
+              }
+
+              self.dhtGetSignalController = new AbortController()
+              const timeoutSignal = AbortSignal.timeout(30_000)
+              const signal = AbortSignal.any([timeoutSignal, self.dhtGetSignalController.signal])
+
+              const keyBytes = fromString(key)
+
+              let valueBytes: Uint8Array | undefined
+              let queryError: Error | undefined
+
+              for await (const event of dht.get(keyBytes, { signal })) {
+                if (event?.name === 'VALUE' && event.value instanceof Uint8Array) {
+                  valueBytes = event.value
+                }
+
+                if (event?.name === 'QUERY_ERROR' && event.error != null) {
+                  queryError = event.error
+                }
+              }
+
+              if (valueBytes == null) {
+                if (queryError != null) {
+                  throw queryError
+                }
+                throw new Error('dht get value not found')
+              }
+
+              self.lastDhtGetStatus = 'done'
+              self.lastDhtGetResult = [
+                `value(utf8) ${toString(valueBytes)}`,
+                `value(base64) ${toString(valueBytes, 'base64')}`,
+                `bytes ${valueBytes.length}`,
+              ]
+              await self.sendUpdate({
+                dhtGetStatus: self.lastDhtGetStatus,
+                dhtGetResult: self.lastDhtGetResult,
+              })
+            } catch (e: any) {
+              self.lastDhtGetStatus = 'error'
+              if (e?.name === 'QueryAbortedError') {
+                self.lastDhtGetResult = ['not-found-or-timeout']
+              } else {
+                self.lastDhtGetResult = [`error ${e?.message ?? e}`]
+              }
+
+              await self.sendUpdate({
+                dhtGetStatus: self.lastDhtGetStatus,
+                dhtGetResult: self.lastDhtGetResult,
+              })
+            }
+
+            break
+          }
+
           default:
             console.log('unknown message type', newMessage.type)
             break
@@ -845,6 +1002,10 @@ export class StatusServer {
     update.dhtProvideStatus = this.lastDhtProvideStatus
     update.dhtFindProviderResult = this.lastDhtFindProviderResult
     update.dhtFindPeerResult = this.lastDhtFindPeerResult
+    update.dhtPutStatus = this.lastDhtPutStatus
+    update.dhtPutResult = this.lastDhtPutResult
+    update.dhtGetStatus = this.lastDhtGetStatus
+    update.dhtGetResult = this.lastDhtGetResult
 
     // perf connect
     this.lastConnectTime = this.connectTime
@@ -868,6 +1029,11 @@ export class StatusServer {
       update.dhtPeers ||
       update.dhtProvideStatus ||
       update.dhtFindProviderResult ||
+      update.dhtFindPeerResult ||
+      update.dhtPutStatus ||
+      update.dhtPutResult ||
+      update.dhtGetStatus ||
+      update.dhtGetResult ||
       update.lastMessage ||
       update.peerScores ||
       update.rtts ||

@@ -1542,6 +1542,140 @@ func dhtFindPeerHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusCreated)
 }
 
+// dhtPutHandler
+func dhtPutHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+		Key         string `json:"key"`
+		Value       string `json:"value"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("dhtPutHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("dhtPutHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.RLock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.RUnlock()
+	if !ok {
+		log.Printf("dhtPutHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("dhtPutHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := map[string]any{
+		"key":   reqBody.Key,
+		"value": reqBody.Value,
+	}
+
+	msg := &ContainerWSReq{
+		MType:   "dhtput",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'dhtput' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
+// dhtGetHandler
+func dhtGetHandler(w http.ResponseWriter, r *http.Request) {
+	type RequestBody struct {
+		ContainerID string `json:"container_id"`
+		Key         string `json:"key"`
+	}
+
+	var reqBody RequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		log.Printf("dhtGetHandler: Failed to decode request body: %v", err)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	var c *websocket.Conn
+
+	if reqBody.ContainerID == "" {
+		log.Printf("dhtGetHandler: container_id is empty")
+		http.Error(w, "Failed - container_id is empty", http.StatusInternalServerError)
+		return
+	}
+
+	var ok bool
+	containerID := reqBody.ContainerID
+	containerConnsMu.RLock()
+	{
+		c, ok = containerConns[containerID]
+	}
+	containerConnsMu.RUnlock()
+	if !ok {
+		log.Printf("dhtGetHandler: Failed to find container in conns id: %s", containerID)
+		http.Error(w, fmt.Sprintf("Failed to find container in conns id: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	if c == nil {
+		log.Printf("dhtGetHandler: Container is nil: %s", containerID)
+		http.Error(w, fmt.Sprintf("Container is nil: %s", containerID), http.StatusInternalServerError)
+		return
+	}
+
+	message := map[string]any{
+		"key": reqBody.Key,
+	}
+
+	msg := &ContainerWSReq{
+		MType:   "dhtget",
+		Message: message,
+	}
+
+	data, err := json.Marshal(msg)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to marshal: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	c.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	if err := c.WriteMessage(websocket.TextMessage, data); err != nil {
+		c.Close()
+		http.Error(w, fmt.Sprintf("Failed to write 'dhtget' to container: %s, %v", containerID, err), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+}
+
 // wsHandler handles WebSocket connections
 func wsHandler(w http.ResponseWriter, r *http.Request) {
 	// Upgrade to websocket (clients)
@@ -1738,6 +1872,8 @@ func main() {
 	mux.HandleFunc("POST /dht/provide", dhtProvideHandler)
 	mux.HandleFunc("POST /dht/findprovider", dhtFindProviderHandler)
 	mux.HandleFunc("POST /dht/findpeer", dhtFindPeerHandler)
+	mux.HandleFunc("POST /dht/put", dhtPutHandler)
+	mux.HandleFunc("POST /dht/get", dhtGetHandler)
 	mux.HandleFunc("/ws", wsHandler)
 
 	handler := enableCors(mux)
