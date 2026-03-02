@@ -1,6 +1,6 @@
-# GossipSub Simulator
+# Libp2p Playground (previously GossipSub Simulator)
 
-![GossipSub Simulator](https://github.com/dozyio/gossipsub-simulator/blob/main/docs/images/screenshot.png?raw=true "GossipSub Simulator")
+![Libp2p Playground ](https://github.com/dozyio/libp2p-playground/blob/main/docs/images/screenshot.png?raw=true "Libp2p Playground")
 
 ## Setup
 
